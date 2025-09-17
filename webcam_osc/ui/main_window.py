@@ -1,0 +1,1031 @@
+"""Main application window with tabbed interface."""
+
+import logging
+from typing import Dict, List, Optional, Any
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                            QTabWidget, QComboBox, QPushButton, QLabel, QSlider,
+                            QSpinBox, QCheckBox, QLineEdit, QTextEdit, QGroupBox,
+                            QGridLayout, QFormLayout, QSplitter, QFrame, QButtonGroup,
+                            QRadioButton, QDoubleSpinBox, QTableWidget, QTableWidgetItem,
+                            QHeaderView, QMessageBox, QFileDialog)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QAction, QFont, QIcon
+
+from ..cameras import CameraManager, CameraInfo
+from ..roi import ROIManager
+from ..processor import ImageProcessor, BlobInfo
+from ..osc_client import OSCClient
+from ..settings_manager import SettingsManager
+from .widgets import VideoPreview, ConsoleWidget, StatusBar, CollapsibleSection
+
+
+class ProcessingThread(QThread):
+    """Thread for image processing to keep UI responsive."""
+    
+    frame_processed = pyqtSignal(object, object, list)  # original_frame, binary_frame, blobs
+    stats_updated = pyqtSignal(dict)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.camera_manager: Optional[CameraManager] = None
+        self.roi_manager: Optional[ROIManager] = None
+        self.processor: Optional[ImageProcessor] = None
+        self.settings_manager: Optional[SettingsManager] = None
+        self.running = False
+        self.processing_enabled = True
+        
+    def setup(self, camera_manager: CameraManager, roi_manager: ROIManager,
+              processor: ImageProcessor, settings_manager: SettingsManager):
+        """Setup the processing thread with required components."""
+        self.camera_manager = camera_manager
+        self.roi_manager = roi_manager
+        self.processor = processor
+        self.settings_manager = settings_manager
+    
+    def run(self):
+        """Main processing loop."""
+        self.running = True
+        
+        while self.running:
+            if not self.processing_enabled or not self.camera_manager:
+                self.msleep(50)
+                continue
+            
+            # Get frame from camera
+            frame = self.camera_manager.get_frame()
+            if frame is None:
+                self.msleep(16)  # ~60 FPS
+                continue
+            
+            try:
+                # Apply ROI
+                roi_frame = self.roi_manager.apply_roi(frame) if self.roi_manager else frame
+                if roi_frame is None:
+                    self.msleep(16)
+                    continue
+                
+                # Process image
+                threshold_config = self.settings_manager.get_threshold_config()
+                morph_config = self.settings_manager.get_morph_config()
+                blob_config = self.settings_manager.get_blob_config()
+                
+                binary_frame, blobs = self.processor.process_image(
+                    roi_frame,
+                    threshold_config.__dict__,
+                    morph_config.__dict__,
+                    blob_config.__dict__
+                )
+                
+                # Emit results
+                self.frame_processed.emit(roi_frame, binary_frame, blobs)
+                
+                # Emit stats
+                camera_stats = self.camera_manager.get_stats()
+                processor_stats = self.processor.get_tracker_stats()
+                stats = {**camera_stats, **processor_stats}
+                self.stats_updated.emit(stats)
+                
+            except Exception as e:
+                logging.error(f"Processing error: {e}")
+            
+            self.msleep(16)  # ~60 FPS
+    
+    def stop(self):
+        """Stop the processing thread."""
+        self.running = False
+        self.wait()
+    
+    def set_processing_enabled(self, enabled: bool):
+        """Enable or disable processing."""
+        self.processing_enabled = enabled
+
+
+class MainWindow(QMainWindow):
+    """Main application window."""
+    
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger(__name__)
+        
+        # Core components
+        self.camera_manager = CameraManager()
+        self.roi_manager = ROIManager()
+        self.processor = ImageProcessor()
+        self.osc_client: Optional[OSCClient] = None
+        self.settings_manager = SettingsManager()
+        
+        # Processing thread
+        self.processing_thread = ProcessingThread()
+        self.processing_thread.setup(
+            self.camera_manager, self.roi_manager, 
+            self.processor, self.settings_manager
+        )
+        
+        # UI state
+        self.current_frame = None
+        self.current_binary = None
+        self.current_blobs: List[BlobInfo] = []
+        self.cameras: List[CameraInfo] = []
+        
+        # Setup UI and load settings
+        self.setup_ui()
+        self.setup_connections()
+        self.load_settings()
+        self.refresh_cameras()
+        
+        # Start processing
+        self.processing_thread.start()
+    
+    def setup_ui(self):
+        """Setup the main UI."""
+        self.setWindowTitle("Webcam-to-OSC")
+        self.setMinimumSize(1200, 800)
+        
+        # Create menu bar
+        self.create_menu_bar()
+        
+        # Central widget with tabs
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        layout = QVBoxLayout(central_widget)
+        
+        # Camera selection row
+        camera_layout = self.create_camera_selection()
+        layout.addLayout(camera_layout)
+        
+        # Main tabs
+        self.tab_widget = QTabWidget()
+        
+        # Tab 1: Capture/ROI
+        self.roi_tab = self.create_roi_tab()
+        self.tab_widget.addTab(self.roi_tab, "1. Capture / ROI")
+        
+        # Tab 2: Threshold & Blob Detection
+        self.threshold_tab = self.create_threshold_tab()
+        self.tab_widget.addTab(self.threshold_tab, "2. Threshold & Blobs")
+        
+        # Tab 3: OSC Output
+        self.osc_tab = self.create_osc_tab()
+        self.tab_widget.addTab(self.osc_tab, "3. OSC Output")
+        
+        layout.addWidget(self.tab_widget)
+        
+        # Status bar
+        self.status_bar = StatusBar()
+        layout.addWidget(self.status_bar)
+    
+    def create_menu_bar(self):
+        """Create the menu bar."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        save_action = QAction("Save Settings", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_settings)
+        file_menu.addAction(save_action)
+        
+        load_action = QAction("Load Settings", self)
+        load_action.triggered.connect(self.load_settings_dialog)
+        file_menu.addAction(load_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Help menu
+        help_menu = menubar.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+    
+    def create_camera_selection(self):
+        """Create camera selection controls."""
+        layout = QHBoxLayout()
+        
+        layout.addWidget(QLabel("Camera:"))
+        
+        self.camera_combo = QComboBox()
+        self.camera_combo.setMinimumWidth(200)
+        layout.addWidget(self.camera_combo)
+        
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.clicked.connect(self.refresh_cameras)
+        layout.addWidget(self.refresh_button)
+        
+        layout.addWidget(QLabel("Resolution:"))
+        
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems(["640x480", "1280x720", "1920x1080"])
+        self.resolution_combo.setCurrentText("1280x720")
+        layout.addWidget(self.resolution_combo)
+        
+        layout.addStretch()
+        
+        return layout
+    
+    def create_roi_tab(self):
+        """Create the ROI selection tab."""
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        
+        # Left side: Video preview
+        preview_group = QGroupBox("Camera Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        
+        self.roi_preview = VideoPreview()
+        self.roi_preview.setMinimumSize(640, 480)
+        preview_layout.addWidget(self.roi_preview)
+        
+        # Preview controls
+        preview_controls = QHBoxLayout()
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setCheckable(True)
+        preview_controls.addWidget(self.pause_button)
+        
+        preview_controls.addStretch()
+        preview_layout.addLayout(preview_controls)
+        
+        layout.addWidget(preview_group, 2)
+        
+        # Right side: ROI controls
+        roi_group = QGroupBox("Region of Interest")
+        roi_layout = QVBoxLayout(roi_group)
+        
+        # ROI info
+        self.roi_info = QLabel("ROI: Not set")
+        roi_layout.addWidget(self.roi_info)
+        
+        # ROI controls with sliders (pixel-based cropping)
+        roi_controls = QGridLayout()
+        
+        # Left crop slider
+        roi_controls.addWidget(QLabel("Left Crop px:"), 0, 0)
+        self.left_slider = QSlider(Qt.Orientation.Horizontal)
+        self.left_slider.setRange(0, 1000)
+        self.left_slider.setValue(0)
+        roi_controls.addWidget(self.left_slider, 0, 1)
+        self.left_label = QLabel("0px")
+        self.left_label.setMinimumWidth(60)
+        roi_controls.addWidget(self.left_label, 0, 2)
+        
+        # Top crop slider
+        roi_controls.addWidget(QLabel("Top Crop px:"), 1, 0)
+        self.top_slider = QSlider(Qt.Orientation.Horizontal)
+        self.top_slider.setRange(0, 1000)
+        self.top_slider.setValue(0)
+        roi_controls.addWidget(self.top_slider, 1, 1)
+        self.top_label = QLabel("0px")
+        self.top_label.setMinimumWidth(60)
+        roi_controls.addWidget(self.top_label, 1, 2)
+        
+        # Right crop slider
+        roi_controls.addWidget(QLabel("Right Crop px:"), 2, 0)
+        self.right_slider = QSlider(Qt.Orientation.Horizontal)
+        self.right_slider.setRange(0, 1000)
+        self.right_slider.setValue(0)
+        roi_controls.addWidget(self.right_slider, 2, 1)
+        self.right_label = QLabel("0px")
+        self.right_label.setMinimumWidth(60)
+        roi_controls.addWidget(self.right_label, 2, 2)
+        
+        # Bottom crop slider
+        roi_controls.addWidget(QLabel("Bottom Crop px:"), 3, 0)
+        self.bottom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.bottom_slider.setRange(0, 1000)
+        self.bottom_slider.setValue(0)
+        roi_controls.addWidget(self.bottom_slider, 3, 1)
+        self.bottom_label = QLabel("0px")
+        self.bottom_label.setMinimumWidth(60)
+        roi_controls.addWidget(self.bottom_label, 3, 2)
+        
+        roi_layout.addLayout(roi_controls)
+        
+        # ROI buttons
+        roi_buttons = QVBoxLayout()
+        
+        self.use_roi_button = QPushButton("Use ROI")
+        roi_buttons.addWidget(self.use_roi_button)
+        
+        self.reset_roi_button = QPushButton("Reset ROI")
+        roi_buttons.addWidget(self.reset_roi_button)
+        
+        self.lock_roi_checkbox = QCheckBox("Lock ROI")
+        roi_buttons.addWidget(self.lock_roi_checkbox)
+        
+        roi_buttons.addStretch()
+        roi_layout.addLayout(roi_buttons)
+        
+        # Cropped preview
+        cropped_group = QGroupBox("Cropped Preview")
+        cropped_layout = QVBoxLayout(cropped_group)
+        
+        self.cropped_preview = VideoPreview()
+        self.cropped_preview.setMaximumSize(320, 240)
+        cropped_layout.addWidget(self.cropped_preview)
+        
+        roi_layout.addWidget(cropped_group)
+        
+        layout.addWidget(roi_group, 1)
+        
+        return tab
+    
+    def create_threshold_tab(self):
+        """Create the threshold and blob detection tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # Top: Controls
+        controls_group = QGroupBox("Processing Controls")
+        controls_layout = QGridLayout(controls_group)
+        
+        # Channel selection
+        controls_layout.addWidget(QLabel("Channel:"), 0, 0)
+        self.channel_combo = QComboBox()
+        self.channel_combo.addItems(["Gray", "Red", "Green", "Blue"])
+        controls_layout.addWidget(self.channel_combo, 0, 1)
+        
+        # Blur
+        controls_layout.addWidget(QLabel("Blur:"), 0, 2)
+        self.blur_slider = QSlider(Qt.Orientation.Horizontal)
+        self.blur_slider.setRange(0, 15)
+        self.blur_slider.setValue(3)
+        controls_layout.addWidget(self.blur_slider, 0, 3)
+        
+        self.blur_label = QLabel("3")
+        controls_layout.addWidget(self.blur_label, 0, 4)
+        
+        # Threshold type
+        threshold_group = QButtonGroup()
+        self.global_radio = QRadioButton("Global")
+        self.global_radio.setChecked(True)
+        self.adaptive_radio = QRadioButton("Adaptive")
+        threshold_group.addButton(self.global_radio)
+        threshold_group.addButton(self.adaptive_radio)
+        
+        controls_layout.addWidget(QLabel("Threshold:"), 1, 0)
+        controls_layout.addWidget(self.global_radio, 1, 1)
+        controls_layout.addWidget(self.adaptive_radio, 1, 2)
+        
+        # Threshold value
+        controls_layout.addWidget(QLabel("Value:"), 2, 0)
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(0, 255)
+        self.threshold_slider.setValue(127)
+        controls_layout.addWidget(self.threshold_slider, 2, 1, 1, 3)
+        
+        self.threshold_label = QLabel("127")
+        controls_layout.addWidget(self.threshold_label, 2, 4)
+        
+        # Morphological operations
+        controls_layout.addWidget(QLabel("Morph Open:"), 3, 0)
+        self.morph_open_slider = QSlider(Qt.Orientation.Horizontal)
+        self.morph_open_slider.setRange(0, 10)
+        controls_layout.addWidget(self.morph_open_slider, 3, 1, 1, 3)
+        
+        self.morph_open_label = QLabel("0")
+        controls_layout.addWidget(self.morph_open_label, 3, 4)
+        
+        controls_layout.addWidget(QLabel("Morph Close:"), 4, 0)
+        self.morph_close_slider = QSlider(Qt.Orientation.Horizontal)
+        self.morph_close_slider.setRange(0, 10)
+        controls_layout.addWidget(self.morph_close_slider, 4, 1, 1, 3)
+        
+        self.morph_close_label = QLabel("0")
+        controls_layout.addWidget(self.morph_close_label, 4, 4)
+        
+        layout.addWidget(controls_group)
+        
+        # Middle: Preview images
+        preview_layout = QHBoxLayout()
+        
+        # Binary preview
+        binary_group = QGroupBox("Binary Image")
+        binary_layout = QVBoxLayout(binary_group)
+        
+        self.binary_preview = VideoPreview()
+        self.binary_preview.setMaximumSize(400, 300)
+        binary_layout.addWidget(self.binary_preview)
+        
+        preview_layout.addWidget(binary_group)
+        
+        # Overlay preview
+        overlay_group = QGroupBox("Blob Detection")
+        overlay_layout = QVBoxLayout(overlay_group)
+        
+        self.overlay_preview = VideoPreview()
+        self.overlay_preview.setMaximumSize(400, 300)
+        overlay_layout.addWidget(self.overlay_preview)
+        
+        preview_layout.addWidget(overlay_group)
+        
+        layout.addLayout(preview_layout)
+        
+        # Bottom: Blob controls
+        blob_group = QGroupBox("Blob Detection")
+        blob_layout = QGridLayout(blob_group)
+        
+        blob_layout.addWidget(QLabel("Min Area:"), 0, 0)
+        self.min_area_spin = QSpinBox()
+        self.min_area_spin.setRange(1, 100000)
+        self.min_area_spin.setValue(200)
+        blob_layout.addWidget(self.min_area_spin, 0, 1)
+        
+        blob_layout.addWidget(QLabel("Max Area:"), 0, 2)
+        self.max_area_spin = QSpinBox()
+        self.max_area_spin.setRange(1, 100000)
+        self.max_area_spin.setValue(20000)
+        blob_layout.addWidget(self.max_area_spin, 0, 3)
+        
+        self.track_ids_checkbox = QCheckBox("Track IDs")
+        self.track_ids_checkbox.setChecked(True)
+        blob_layout.addWidget(self.track_ids_checkbox, 0, 4)
+        
+        self.clear_ids_button = QPushButton("Clear IDs")
+        blob_layout.addWidget(self.clear_ids_button, 0, 5)
+        
+        layout.addWidget(blob_group)
+        
+        return tab
+    
+    def create_osc_tab(self):
+        """Create the OSC output tab."""
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        
+        # Left side: OSC settings
+        settings_group = QGroupBox("OSC Settings")
+        settings_layout = QFormLayout(settings_group)
+        
+        self.osc_ip = QLineEdit("127.0.0.1")
+        settings_layout.addRow("IP Address:", self.osc_ip)
+        
+        self.osc_port = QSpinBox()
+        self.osc_port.setRange(1, 65535)
+        self.osc_port.setValue(8000)
+        settings_layout.addRow("Port:", self.osc_port)
+        
+        self.osc_protocol = QComboBox()
+        self.osc_protocol.addItems(["UDP", "TCP"])
+        settings_layout.addRow("Protocol:", self.osc_protocol)
+        
+        self.normalize_coords = QCheckBox("Normalize Coordinates")
+        self.normalize_coords.setChecked(True)
+        settings_layout.addRow(self.normalize_coords)
+        
+        # Connection controls
+        conn_layout = QHBoxLayout()
+        self.connect_button = QPushButton("Connect")
+        self.test_button = QPushButton("Test")
+        conn_layout.addWidget(self.connect_button)
+        conn_layout.addWidget(self.test_button)
+        settings_layout.addRow(conn_layout)
+        
+        layout.addWidget(settings_group)
+        
+        # Middle: Field selection and mapping
+        mapping_group = QGroupBox("OSC Mapping")
+        mapping_layout = QVBoxLayout(mapping_group)
+        
+        # Field checkboxes
+        fields_layout = QGridLayout()
+        
+        self.send_center = QCheckBox("Center (cx, cy)")
+        self.send_center.setChecked(True)
+        fields_layout.addWidget(self.send_center, 0, 0)
+        
+        self.send_position = QCheckBox("Position (x, y)")
+        fields_layout.addWidget(self.send_position, 0, 1)
+        
+        self.send_size = QCheckBox("Size (w, h)")
+        fields_layout.addWidget(self.send_size, 1, 0)
+        
+        self.send_area = QCheckBox("Area")
+        fields_layout.addWidget(self.send_area, 1, 1)
+        
+        self.send_polygon = QCheckBox("Polygon")
+        fields_layout.addWidget(self.send_polygon, 2, 0)
+        
+        mapping_layout.addLayout(fields_layout)
+        
+        # Mapping table
+        self.mapping_table = QTableWidget(5, 2)
+        self.mapping_table.setHorizontalHeaderLabels(["Field", "OSC Address"])
+        self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        
+        # Default mappings
+        mappings = [
+            ("Center", "/blob/{id}/center"),
+            ("Position", "/blob/{id}/pos"),
+            ("Size", "/blob/{id}/size"),
+            ("Area", "/blob/{id}/area"),
+            ("Polygon", "/blob/{id}/poly")
+        ]
+        
+        for i, (field, address) in enumerate(mappings):
+            self.mapping_table.setItem(i, 0, QTableWidgetItem(field))
+            self.mapping_table.setItem(i, 1, QTableWidgetItem(address))
+        
+        mapping_layout.addWidget(self.mapping_table)
+        
+        # Send controls
+        send_layout = QHBoxLayout()
+        
+        self.send_on_detect = QCheckBox("Send on Detection")
+        self.send_on_detect.setChecked(True)
+        send_layout.addWidget(self.send_on_detect)
+        
+        self.manual_send_button = QPushButton("Manual Send")
+        send_layout.addWidget(self.manual_send_button)
+        
+        mapping_layout.addLayout(send_layout)
+        
+        layout.addWidget(mapping_group)
+        
+        # Right side: Console
+        console_group = QGroupBox("Console")
+        console_layout = QVBoxLayout(console_group)
+        
+        self.console = ConsoleWidget()
+        console_layout.addWidget(self.console)
+        
+        console_controls = QHBoxLayout()
+        self.clear_console_button = QPushButton("Clear")
+        self.clear_console_button.clicked.connect(self.console.clear_console)
+        console_controls.addWidget(self.clear_console_button)
+        console_controls.addStretch()
+        
+        console_layout.addLayout(console_controls)
+        
+        layout.addWidget(console_group)
+        
+        return tab
+    
+    def setup_connections(self):
+        """Setup signal connections."""
+        # Camera selection
+        self.camera_combo.currentTextChanged.connect(self.on_camera_changed)
+        self.resolution_combo.currentTextChanged.connect(self.on_resolution_changed)
+        
+        # ROI controls
+        self.use_roi_button.clicked.connect(self.on_use_roi)
+        self.reset_roi_button.clicked.connect(self.on_reset_roi)
+        self.lock_roi_checkbox.toggled.connect(self.on_roi_lock_changed)
+        
+        # ROI sliders
+        self.left_slider.valueChanged.connect(self.on_roi_slider_changed)
+        self.top_slider.valueChanged.connect(self.on_roi_slider_changed)
+        self.right_slider.valueChanged.connect(self.on_roi_slider_changed)
+        self.bottom_slider.valueChanged.connect(self.on_roi_slider_changed)
+        
+        # Processing controls
+        self.pause_button.toggled.connect(self.on_pause_toggled)
+        self.channel_combo.currentTextChanged.connect(self.on_processing_changed)
+        self.blur_slider.valueChanged.connect(self.on_blur_changed)
+        self.global_radio.toggled.connect(self.on_processing_changed)
+        self.adaptive_radio.toggled.connect(self.on_processing_changed)
+        self.threshold_slider.valueChanged.connect(self.on_threshold_changed)
+        self.morph_open_slider.valueChanged.connect(self.on_morph_open_changed)
+        self.morph_close_slider.valueChanged.connect(self.on_morph_close_changed)
+        
+        # Blob controls
+        self.min_area_spin.valueChanged.connect(self.on_blob_config_changed)
+        self.max_area_spin.valueChanged.connect(self.on_blob_config_changed)
+        self.track_ids_checkbox.toggled.connect(self.on_blob_config_changed)
+        self.clear_ids_button.clicked.connect(self.on_clear_ids)
+        
+        # OSC controls
+        self.connect_button.clicked.connect(self.on_osc_connect)
+        self.test_button.clicked.connect(self.on_osc_test)
+        self.manual_send_button.clicked.connect(self.on_manual_send)
+        self.osc_ip.textChanged.connect(self.on_osc_config_changed)
+        self.osc_port.valueChanged.connect(self.on_osc_config_changed)
+        self.osc_protocol.currentTextChanged.connect(self.on_osc_config_changed)
+        
+        # Processing thread
+        self.processing_thread.frame_processed.connect(self.on_frame_processed)
+        self.processing_thread.stats_updated.connect(self.on_stats_updated)
+    
+    @pyqtSlot()
+    def refresh_cameras(self):
+        """Refresh the camera list."""
+        self.cameras = self.camera_manager.list_cameras()
+        self.camera_combo.clear()
+        
+        for camera in self.cameras:
+            self.camera_combo.addItem(str(camera))
+        
+        if self.cameras:
+            self.console.append_message(f"Found {len(self.cameras)} cameras", "info")
+        else:
+            self.console.append_message("No cameras found", "warning")
+    
+    @pyqtSlot(str)
+    def on_camera_changed(self, camera_name: str):
+        """Handle camera selection change."""
+        if not self.cameras:
+            return
+        
+        # Find camera by name
+        selected_camera = None
+        for camera in self.cameras:
+            if str(camera) == camera_name:
+                selected_camera = camera
+                break
+        
+        if selected_camera:
+            if self.camera_manager.open_camera(selected_camera.id):
+                self.console.append_message(f"Opened camera: {camera_name}", "success")
+                self.camera_manager.start_capture()
+                
+                # Update settings
+                self.settings_manager.update_camera_config(
+                    friendly_name=selected_camera.friendly_name,
+                    backend_id=selected_camera.backend_id
+                )
+            else:
+                self.console.append_message(f"Failed to open camera: {camera_name}", "error")
+    
+    @pyqtSlot(str)
+    def on_resolution_changed(self, resolution: str):
+        """Handle resolution change."""
+        if "x" in resolution:
+            try:
+                width, height = map(int, resolution.split("x"))
+                if self.camera_manager.set_resolution(width, height):
+                    self.console.append_message(f"Set resolution to {resolution}", "info")
+                    self.settings_manager.update_camera_config(resolution=[width, height])
+            except ValueError:
+                pass
+    
+    # ROI event handlers
+    @pyqtSlot()
+    def on_roi_slider_changed(self):
+        """Handle ROI slider changes."""
+        # Get raw slider values - no modification
+        left = self.left_slider.value()
+        top = self.top_slider.value()
+        right = self.right_slider.value()
+        bottom = self.bottom_slider.value()
+        
+        # Update labels to show exact slider values
+        self.left_label.setText(f"{left}px")
+        self.top_label.setText(f"{top}px")
+        self.right_label.setText(f"{right}px")
+        self.bottom_label.setText(f"{bottom}px")
+        
+        # Update ROI manager with slider values
+        self.roi_manager.set_crop_pixels(left, top, right, bottom)
+        self.update_roi_info()
+    
+    @pyqtSlot()
+    def on_use_roi(self):
+        """Use current ROI settings."""
+        roi = self.roi_manager.get_roi()
+        if roi:
+            self.settings_manager.update_roi_config(**roi.__dict__)
+            self.console.append_message("ROI settings saved", "success")
+    
+    @pyqtSlot()
+    def on_reset_roi(self):
+        """Reset ROI to full frame."""
+        self.roi_manager.reset_roi()
+        
+        # Update sliders (block signals to prevent feedback)
+        self.left_slider.blockSignals(True)
+        self.top_slider.blockSignals(True)
+        self.right_slider.blockSignals(True)
+        self.bottom_slider.blockSignals(True)
+        
+        self.left_slider.setValue(0)
+        self.top_slider.setValue(0)
+        self.right_slider.setValue(0)
+        self.bottom_slider.setValue(0)
+        
+        self.left_slider.blockSignals(False)
+        self.top_slider.blockSignals(False)
+        self.right_slider.blockSignals(False)
+        self.bottom_slider.blockSignals(False)
+        
+        # Update labels
+        self.left_label.setText("0px")
+        self.top_label.setText("0px")
+        self.right_label.setText("0px")
+        self.bottom_label.setText("0px")
+        
+        self.update_roi_info()
+    
+    @pyqtSlot(bool)
+    def on_roi_lock_changed(self, locked: bool):
+        """Handle ROI lock change."""
+        self.roi_manager.set_locked(locked)
+        self.settings_manager.update_roi_config(locked=locked)
+    
+    def update_roi_info(self):
+        """Update ROI information display."""
+        roi = self.roi_manager.get_roi()
+        if roi:
+            left, top, right, bottom = self.roi_manager.get_crop_pixels()
+            self.roi_info.setText(f"ROI: ({roi.x}, {roi.y}) {roi.w}x{roi.h} - Crop: {left}px,{top}px,{right}px,{bottom}px")
+        else:
+            self.roi_info.setText("ROI: Not set")
+    
+    
+    # Processing event handlers
+    @pyqtSlot(bool)
+    def on_pause_toggled(self, paused: bool):
+        """Handle pause toggle."""
+        self.processing_thread.set_processing_enabled(not paused)
+        self.pause_button.setText("Resume" if paused else "Pause")
+    
+    @pyqtSlot()
+    def on_processing_changed(self):
+        """Handle processing parameter changes."""
+        channel = self.channel_combo.currentText().lower()
+        mode = "global" if self.global_radio.isChecked() else "adaptive"
+        
+        self.settings_manager.update_threshold_config(
+            channel=channel,
+            mode=mode
+        )
+    
+    @pyqtSlot(int)
+    def on_blur_changed(self, value: int):
+        """Handle blur change."""
+        self.blur_label.setText(str(value))
+        self.settings_manager.update_threshold_config(blur=value)
+    
+    @pyqtSlot(int)
+    def on_threshold_changed(self, value: int):
+        """Handle threshold change."""
+        self.threshold_label.setText(str(value))
+        self.settings_manager.update_threshold_config(value=value)
+    
+    @pyqtSlot(int)
+    def on_morph_open_changed(self, value: int):
+        """Handle morphological open change."""
+        self.morph_open_label.setText(str(value))
+        self.settings_manager.update_morph_config(open=value)
+    
+    @pyqtSlot(int)
+    def on_morph_close_changed(self, value: int):
+        """Handle morphological close change."""
+        self.morph_close_label.setText(str(value))
+        self.settings_manager.update_morph_config(close=value)
+    
+    @pyqtSlot()
+    def on_blob_config_changed(self):
+        """Handle blob configuration changes."""
+        self.settings_manager.update_blob_config(
+            min_area=self.min_area_spin.value(),
+            max_area=self.max_area_spin.value(),
+            track_ids=self.track_ids_checkbox.isChecked()
+        )
+    
+    @pyqtSlot()
+    def on_clear_ids(self):
+        """Clear blob tracking IDs."""
+        self.processor.reset_tracker()
+        self.console.append_message("Blob tracking IDs cleared", "info")
+    
+    # OSC event handlers
+    @pyqtSlot()
+    def on_osc_connect(self):
+        """Connect to OSC destination."""
+        ip = self.osc_ip.text()
+        port = self.osc_port.value()
+        protocol = self.osc_protocol.currentText().lower()
+        
+        if self.osc_client:
+            self.osc_client.close()
+        
+        self.osc_client = OSCClient(ip, port, protocol)
+        self.osc_client.set_callbacks(
+            on_message_sent=self.on_osc_message_sent,
+            on_send_error=self.on_osc_error
+        )
+        
+        if self.osc_client.test_connection():
+            self.console.append_message(f"Connected to OSC {protocol.upper()} {ip}:{port}", "success")
+            self.status_bar.update_connection_status("Connected")
+            self.connect_button.setText("Disconnect")
+        else:
+            self.console.append_message("Failed to connect to OSC", "error")
+            self.status_bar.update_connection_status("Error")
+    
+    @pyqtSlot()
+    def on_osc_test(self):
+        """Send test OSC message."""
+        if self.osc_client:
+            self.osc_client.send_test_message()
+        else:
+            self.console.append_message("OSC not connected", "warning")
+    
+    @pyqtSlot()
+    def on_manual_send(self):
+        """Manually send blob data."""
+        if self.osc_client and self.current_blobs:
+            self.send_blob_data()
+        else:
+            self.console.append_message("No OSC connection or no blobs detected", "warning")
+    
+    @pyqtSlot()
+    def on_osc_config_changed(self):
+        """Handle OSC configuration changes."""
+        self.settings_manager.update_osc_config(
+            ip=self.osc_ip.text(),
+            port=self.osc_port.value(),
+            protocol=self.osc_protocol.currentText().lower(),
+            normalize_coords=self.normalize_coords.isChecked()
+        )
+    
+    def on_osc_message_sent(self, address: str, args: List[Any]):
+        """Handle OSC message sent callback."""
+        self.console.append_osc_message(address, args)
+    
+    def on_osc_error(self, address: str, error: Exception):
+        """Handle OSC send error callback."""
+        self.console.append_error(f"OSC send failed: {error}")
+    
+    # Processing thread handlers
+    @pyqtSlot(object, object, list)
+    def on_frame_processed(self, original_frame, binary_frame, blobs: List[BlobInfo]):
+        """Handle processed frame from processing thread."""
+        self.current_frame = original_frame
+        self.current_binary = binary_frame
+        self.current_blobs = blobs
+        
+        # Update video previews
+        if self.current_frame is not None:
+            # Update ROI image size
+            h, w = self.current_frame.shape[:2]
+            self.roi_manager.set_image_size(w, h)
+            
+            # Don't update slider ranges automatically to prevent accumulation
+            # self.update_slider_ranges(w, h)
+            
+            # Set overlay callback for ROI preview
+            self.roi_preview.set_overlay_callback(
+                lambda img: self.roi_manager.draw_overlay(img)
+            )
+            self.roi_preview.set_image(self.current_frame)
+            
+            # Update cropped preview
+            cropped = self.roi_manager.apply_roi(self.current_frame)
+            if cropped is not None:
+                self.cropped_preview.set_image(cropped)
+        
+        # Update binary preview
+        if self.current_binary is not None:
+            self.binary_preview.set_image(self.current_binary)
+        
+        # Update overlay preview with blob detection
+        if self.current_frame is not None and self.current_blobs:
+            cropped = self.roi_manager.apply_roi(self.current_frame)
+            if cropped is not None:
+                overlay_image = self.processor.draw_blob_overlay(cropped, self.current_blobs)
+                self.overlay_preview.set_image(overlay_image)
+        
+        # Send OSC data if enabled
+        if (self.send_on_detect.isChecked() and self.osc_client and 
+            self.current_blobs and self.current_frame is not None):
+            self.send_blob_data()
+    
+    @pyqtSlot(dict)
+    def on_stats_updated(self, stats: Dict[str, Any]):
+        """Handle stats update from processing thread."""
+        self.status_bar.update_fps(stats.get('fps', 0))
+        self.status_bar.update_dropped_frames(stats.get('dropped_frames', 0))
+    
+    def send_blob_data(self):
+        """Send blob data via OSC."""
+        if not self.osc_client or not self.current_blobs:
+            return
+        
+        # Get ROI dimensions for normalization
+        roi = self.roi_manager.get_roi()
+        roi_width = roi.w if roi else self.current_frame.shape[1]
+        roi_height = roi.h if roi else self.current_frame.shape[0]
+        
+        # Get current mappings from table
+        mappings = {}
+        for i in range(self.mapping_table.rowCount()):
+            field_item = self.mapping_table.item(i, 0)
+            address_item = self.mapping_table.item(i, 1)
+            if field_item and address_item:
+                field = field_item.text().lower()
+                address = address_item.text()
+                mappings[field] = address
+        
+        # Get enabled fields
+        enabled_fields = {
+            'center': self.send_center.isChecked(),
+            'position': self.send_position.isChecked(),
+            'size': self.send_size.isChecked(),
+            'area': self.send_area.isChecked(),
+            'polygon': self.send_polygon.isChecked()
+        }
+        
+        # Send data for all blobs
+        self.osc_client.send_multiple_blobs(
+            self.current_blobs,
+            mappings,
+            roi_width,
+            roi_height,
+            self.normalize_coords.isChecked(),
+            enabled_fields
+        )
+    
+    def load_settings(self):
+        """Load settings from file."""
+        try:
+            self.settings_manager.load_config()
+            
+            # Apply loaded settings to UI
+            camera_config = self.settings_manager.get_camera_config()
+            roi_config = self.settings_manager.get_roi_config()
+            threshold_config = self.settings_manager.get_threshold_config()
+            morph_config = self.settings_manager.get_morph_config()
+            blob_config = self.settings_manager.get_blob_config()
+            osc_config = self.settings_manager.get_osc_config()
+            
+            # Update UI controls
+            self.blur_slider.setValue(threshold_config.blur)
+            self.threshold_slider.setValue(threshold_config.value)
+            self.min_area_spin.setValue(blob_config.min_area)
+            self.max_area_spin.setValue(blob_config.max_area)
+            self.track_ids_checkbox.setChecked(blob_config.track_ids)
+            
+            self.osc_ip.setText(osc_config.ip)
+            self.osc_port.setValue(osc_config.port)
+            self.osc_protocol.setCurrentText(osc_config.protocol.upper())
+            self.normalize_coords.setChecked(osc_config.normalize_coords)
+            self.send_on_detect.setChecked(osc_config.send_on_detect)
+            
+            # Update ROI (don't update crop values to avoid interfering with sliders)
+            self.roi_manager.set_roi(roi_config.x, roi_config.y, roi_config.w, roi_config.h, update_crop_values=False)
+            self.roi_manager.set_locked(roi_config.locked)
+            self.lock_roi_checkbox.setChecked(roi_config.locked)
+            
+            # Note: Don't update sliders from ROI config to avoid accumulation
+            # The sliders should maintain their current values
+            
+            self.console.append_message("Settings loaded", "success")
+            self.status_bar.update_config_status("Loaded")
+            
+        except Exception as e:
+            self.console.append_message(f"Failed to load settings: {e}", "error")
+            self.status_bar.update_config_status("Error")
+    
+    def save_settings(self):
+        """Save current settings to file."""
+        try:
+            self.settings_manager.save_config()
+            self.console.append_message("Settings saved", "success")
+            self.status_bar.update_config_status("Saved")
+        except Exception as e:
+            self.console.append_message(f"Failed to save settings: {e}", "error")
+            self.status_bar.update_config_status("Error")
+    
+    def load_settings_dialog(self):
+        """Show load settings dialog."""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Load Settings", "", "JSON files (*.json)"
+        )
+        if filename:
+            try:
+                self.settings_manager.config_path = filename
+                self.load_settings()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load settings: {e}")
+    
+    def show_about(self):
+        """Show about dialog."""
+        QMessageBox.about(
+            self, "About Webcam-to-OSC",
+            "Webcam-to-OSC v1.0\n\n"
+            "A real-time blob detection and OSC streaming application.\n"
+            "Captures webcam feed, detects blobs, and sends data via OSC."
+        )
+    
+    def closeEvent(self, event):
+        """Handle window close event."""
+        # Stop processing thread
+        self.processing_thread.stop()
+        
+        # Close camera
+        self.camera_manager.close_camera()
+        
+        # Close OSC client
+        if self.osc_client:
+            self.osc_client.close()
+        
+        # Save settings
+        self.save_settings()
+        
+        event.accept()
