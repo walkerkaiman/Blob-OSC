@@ -36,6 +36,7 @@ class ROIConfig:
 @dataclass
 class ThresholdConfig:
     mode: str = "global"  # "global" or "adaptive"
+    channel: str = "gray"  # "gray", "red", "green", "blue"
     value: int = 127
     blur: int = 3
     adaptive: Dict[str, Any] = None
@@ -70,6 +71,8 @@ class OSCConfig:
     mappings: Dict[str, str] = None
     send_on_detect: bool = True
     normalize_coords: bool = True
+    max_fps: float = 30.0  # Maximum OSC message rate (FPS)
+    rate_limit_enabled: bool = True
     
     def __post_init__(self):
         if self.mappings is None:
@@ -136,18 +139,14 @@ class SettingsManager:
     def save_config(self) -> None:
         """Save configuration to JSON file."""
         if not self._auto_save_enabled:
-            print("Settings Manager - Auto-save disabled, skipping save")
             return
             
         try:
             data = self._to_dict()
-            print(f"Settings Manager - Saving ROI data: {data.get('roi', {})}")
             with open(self.config_path, 'w') as f:
                 json.dump(data, f, indent=2)
-            print(f"Settings Manager - Saved config to {self.config_path}")
             self.logger.debug(f"Saved config to {self.config_path}")
         except Exception as e:
-            print(f"Settings Manager - Save failed: {e}")
             self.logger.error(f"Failed to save config: {e}")
     
     def _load_from_dict(self, data: Dict[str, Any]) -> None:
@@ -181,6 +180,7 @@ class SettingsManager:
             thresh_data = data['threshold']
             self.config.threshold = ThresholdConfig(
                 mode=thresh_data.get('mode', 'global'),
+                channel=thresh_data.get('channel', 'gray'),
                 value=thresh_data.get('value', 127),
                 blur=thresh_data.get('blur', 3),
                 adaptive=thresh_data.get('adaptive', {
@@ -222,7 +222,9 @@ class SettingsManager:
                     "area": "/blob/{id}/area"
                 }),
                 send_on_detect=osc_data.get('send_on_detect', True),
-                normalize_coords=osc_data.get('normalize_coords', True)
+                normalize_coords=osc_data.get('normalize_coords', True),
+                max_fps=osc_data.get('max_fps', 30.0),
+                rate_limit_enabled=osc_data.get('rate_limit_enabled', True)
             )
     
     def _to_dict(self) -> Dict[str, Any]:
@@ -269,14 +271,9 @@ class SettingsManager:
     
     def update_roi_config(self, **kwargs) -> None:
         """Update ROI configuration."""
-        print(f"Settings Manager - Updating ROI config with: {kwargs}")
         for key, value in kwargs.items():
             if hasattr(self.config.roi, key):
                 setattr(self.config.roi, key, value)
-                print(f"Settings Manager - Set {key} = {value}")
-            else:
-                print(f"Settings Manager - Warning: ROI config has no attribute '{key}'")
-        print(f"Settings Manager - Final ROI config: {self.config.roi}")
         self.save_config()
     
     def update_threshold_config(self, **kwargs) -> None:

@@ -13,12 +13,13 @@ from .processor import BlobInfo
 class OSCClient:
     """OSC client wrapper for sending blob data."""
     
-    def __init__(self, ip: str = "127.0.0.1", port: int = 8000, protocol: str = "udp"):
+    def __init__(self, ip: str = "127.0.0.1", port: int = 8000, protocol: str = "udp", async_mode: bool = True):
         self.ip = ip
         self.port = port
         self.protocol = protocol.lower()
+        self.async_mode = async_mode
         self.client = None
-        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.executor = ThreadPoolExecutor(max_workers=2) if async_mode else None
         self.logger = logging.getLogger(__name__)
         self.message_log: List[Dict[str, Any]] = []
         self.max_log_size = 1000
@@ -65,14 +66,48 @@ class OSCClient:
         return self._connect()
     
     def send_message(self, address: str, *args) -> None:
-        """Send an OSC message (non-blocking)."""
+        """Send an OSC message (async or sync based on mode)."""
         if not self.client:
             self.logger.warning("OSC client not connected")
             return
         
-        # Submit to thread pool for non-blocking send
-        future = self.executor.submit(self._send_message_sync, address, args)
-        future.add_done_callback(self._handle_send_result)
+        try:
+            # Validate arguments to prevent crashes
+            validated_args = []
+            for arg in args:
+                if isinstance(arg, (int, float, str, bool)):
+                    validated_args.append(arg)
+                elif arg is None:
+                    validated_args.append(0)  # Convert None to 0
+                else:
+                    # Convert other types to string
+                    validated_args.append(str(arg))
+            
+            if self.async_mode and self.executor:
+                # Async mode: Submit to thread pool for non-blocking send
+                future = self.executor.submit(self._send_message_sync, address, tuple(validated_args))
+                future.add_done_callback(self._handle_send_result)
+            else:
+                # Sync mode: Send directly
+                result = self._send_message_sync(address, tuple(validated_args))
+                if result['status'] == 'success' and self.on_message_sent:
+                    try:
+                        self.on_message_sent(result['address'], result['args'])
+                    except Exception as callback_error:
+                        self.logger.error(f"Error in message_sent callback: {callback_error}")
+                elif result['status'] == 'error' and self.on_send_error:
+                    try:
+                        self.on_send_error(result['address'], Exception(result['error']))
+                    except Exception as callback_error:
+                        self.logger.error(f"Error in send_error callback: {callback_error}")
+                        
+        except Exception as e:
+            self.logger.error(f"Error submitting OSC message: {e}")
+            if self.on_send_error:
+                try:
+                    self.on_send_error(address, e)
+                except:
+                    pass
     
     def _send_message_sync(self, address: str, args: tuple) -> Dict[str, Any]:
         """Send OSC message synchronously."""
@@ -108,21 +143,38 @@ class OSCClient:
                 'status': 'error'
             }
             
-            self._add_to_log(log_entry)
-            self.stats['messages_failed'] += 1
+            try:
+                self._add_to_log(log_entry)
+                self.stats['messages_failed'] += 1
+            except:
+                pass  # Don't let logging errors cause crashes
+            
             self.logger.error(f"Failed to send OSC message to {address}: {e}")
             
-            raise e
+            # Don't re-raise - return error log entry instead
+            return log_entry
     
     def _handle_send_result(self, future) -> None:
         """Handle the result of an async send operation."""
         try:
             result = future.result()
-            if self.on_message_sent:
-                self.on_message_sent(result['address'], result['args'])
+            if result['status'] == 'success' and self.on_message_sent:
+                try:
+                    self.on_message_sent(result['address'], result['args'])
+                except Exception as callback_error:
+                    self.logger.error(f"Error in message_sent callback: {callback_error}")
+            elif result['status'] == 'error' and self.on_send_error:
+                try:
+                    self.on_send_error(result['address'], Exception(result['error']))
+                except Exception as callback_error:
+                    self.logger.error(f"Error in send_error callback: {callback_error}")
         except Exception as e:
+            self.logger.error(f"Error in send result handler: {e}")
             if self.on_send_error:
-                self.on_send_error("", e)
+                try:
+                    self.on_send_error("", e)
+                except Exception as callback_error:
+                    self.logger.error(f"Error in send_error callback: {callback_error}")
     
     def _add_to_log(self, entry: Dict[str, Any]) -> None:
         """Add entry to message log."""
@@ -171,46 +223,61 @@ class OSCClient:
         
         # Send center coordinates
         if enabled_fields.get('center', False) and 'center' in mappings:
-            address = mappings['center'].format(**format_vars)
-            if normalize_coords:
-                cx_norm, cy_norm = blob.get_center_normalized(roi_width, roi_height)
-                self.send_message(address, cx_norm, cy_norm)
-            else:
-                self.send_message(address, blob.center[0], blob.center[1])
+            try:
+                address = mappings['center'].format(**format_vars)
+                if normalize_coords and roi_width > 0 and roi_height > 0:
+                    cx_norm, cy_norm = blob.get_center_normalized(roi_width, roi_height)
+                    self.send_message(address, cx_norm, cy_norm)
+                else:
+                    self.send_message(address, blob.center[0], blob.center[1])
+            except Exception as e:
+                self.logger.error(f"Error sending center data: {e}")
         
         # Send position (top-left of bounding box)
         if enabled_fields.get('position', False) and 'position' in mappings:
-            address = mappings['position'].format(**format_vars)
-            if normalize_coords:
-                x_norm = blob.bbox[0] / roi_width
-                y_norm = blob.bbox[1] / roi_height
-                self.send_message(address, x_norm, y_norm)
-            else:
-                self.send_message(address, blob.bbox[0], blob.bbox[1])
+            try:
+                address = mappings['position'].format(**format_vars)
+                if normalize_coords and roi_width > 0 and roi_height > 0:
+                    x_norm = blob.bbox[0] / roi_width
+                    y_norm = blob.bbox[1] / roi_height
+                    self.send_message(address, x_norm, y_norm)
+                else:
+                    self.send_message(address, blob.bbox[0], blob.bbox[1])
+            except Exception as e:
+                self.logger.error(f"Error sending position data: {e}")
         
         # Send size
         if enabled_fields.get('size', False) and 'size' in mappings:
-            address = mappings['size'].format(**format_vars)
-            if normalize_coords:
-                w_norm = blob.bbox[2] / roi_width
-                h_norm = blob.bbox[3] / roi_height
-                self.send_message(address, w_norm, h_norm)
-            else:
-                self.send_message(address, blob.bbox[2], blob.bbox[3])
+            try:
+                address = mappings['size'].format(**format_vars)
+                if normalize_coords and roi_width > 0 and roi_height > 0:
+                    w_norm = blob.bbox[2] / roi_width
+                    h_norm = blob.bbox[3] / roi_height
+                    self.send_message(address, w_norm, h_norm)
+                else:
+                    self.send_message(address, blob.bbox[2], blob.bbox[3])
+            except Exception as e:
+                self.logger.error(f"Error sending size data: {e}")
         
         # Send area
         if enabled_fields.get('area', False) and 'area' in mappings:
-            address = mappings['area'].format(**format_vars)
-            area_value = blob.area
-            if normalize_coords:
-                # Normalize area by ROI area
-                area_value = blob.area / (roi_width * roi_height)
-            self.send_message(address, area_value)
+            try:
+                address = mappings['area'].format(**format_vars)
+                area_value = blob.area
+                if normalize_coords and roi_width > 0 and roi_height > 0:
+                    # Normalize area by ROI area
+                    area_value = blob.area / (roi_width * roi_height)
+                self.send_message(address, area_value)
+            except Exception as e:
+                self.logger.error(f"Error sending area data: {e}")
         
         # Send polygon
         if enabled_fields.get('polygon', False) and 'polygon' in mappings:
-            address = mappings['polygon'].format(**format_vars)
-            self.send_blob_polygon(address, blob.polygon, roi_width, roi_height, normalize_coords)
+            try:
+                address = mappings['polygon'].format(**format_vars)
+                self.send_blob_polygon(address, blob.polygon, roi_width, roi_height, normalize_coords)
+            except Exception as e:
+                self.logger.error(f"Error sending polygon data: {e}")
     
     def send_blob_polygon(self, address: str, polygon: List[Tuple[int, int]], 
                          roi_width: int, roi_height: int, normalize_coords: bool = True) -> None:
@@ -218,14 +285,17 @@ class OSCClient:
         if not polygon:
             return
         
-        # Option 1: Send as JSON string (most compatible)
-        if normalize_coords:
-            norm_polygon = [(x / roi_width, y / roi_height) for x, y in polygon]
-            polygon_str = json.dumps(norm_polygon)
-        else:
-            polygon_str = json.dumps(polygon)
-        
-        self.send_message(address, polygon_str)
+        try:
+            # Option 1: Send as JSON string (most compatible)
+            if normalize_coords and roi_width > 0 and roi_height > 0:
+                norm_polygon = [(x / roi_width, y / roi_height) for x, y in polygon]
+                polygon_str = json.dumps(norm_polygon)
+            else:
+                polygon_str = json.dumps(polygon)
+            
+            self.send_message(address, polygon_str)
+        except Exception as e:
+            self.logger.error(f"Error sending polygon data: {e}")
         
         # Option 2: Send as flat numeric array (uncomment if preferred)
         # if normalize_coords:
@@ -291,14 +361,19 @@ class OSCClient:
     
     def close(self) -> None:
         """Close the OSC client."""
-        if self.executor:
-            self.executor.shutdown(wait=False)
+        try:
+            if self.executor:
+                # Shutdown executor gracefully
+                self.executor.shutdown(wait=True)
+                self.executor = None
+        except Exception as e:
+            self.logger.error(f"Error shutting down executor: {e}")
         
-        if hasattr(self.client, 'close'):
-            try:
+        try:
+            if hasattr(self.client, 'close'):
                 self.client.close()
-            except:
-                pass
+        except Exception as e:
+            self.logger.error(f"Error closing OSC client: {e}")
         
         self.client = None
         self.stats['connection_status'] = 'disconnected'

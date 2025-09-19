@@ -1,6 +1,7 @@
 """Main application window with tabbed interface."""
 
 import logging
+import time
 from typing import Dict, List, Optional, Any
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QTabWidget, QComboBox, QPushButton, QLabel, QSlider,
@@ -127,6 +128,10 @@ class MainWindow(QMainWindow):
         self.current_binary = None
         self.current_blobs: List[BlobInfo] = []
         self.cameras: List[CameraInfo] = []
+        
+        # OSC rate limiting
+        self.last_osc_send_time = 0.0
+        self.osc_send_interval = 1.0 / 30.0  # Default 30 FPS
         
         
         # Setup UI and load settings
@@ -353,6 +358,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(QLabel("Channel:"), 0, 0)
         self.channel_combo = QComboBox()
         self.channel_combo.addItems(["Gray", "Red", "Green", "Blue"])
+        self.channel_combo.setToolTip("Select which color channel to use for processing")
         controls_layout.addWidget(self.channel_combo, 0, 1)
         
         # Blur
@@ -360,6 +366,7 @@ class MainWindow(QMainWindow):
         self.blur_slider = QSlider(Qt.Orientation.Horizontal)
         self.blur_slider.setRange(0, 15)
         self.blur_slider.setValue(3)
+        self.blur_slider.setToolTip("Apply Gaussian blur to reduce noise before thresholding")
         controls_layout.addWidget(self.blur_slider, 0, 3)
         
         self.blur_label = QLabel("3")
@@ -369,7 +376,9 @@ class MainWindow(QMainWindow):
         threshold_group = QButtonGroup()
         self.global_radio = QRadioButton("Global")
         self.global_radio.setChecked(True)
+        self.global_radio.setToolTip("Use a single threshold value for the entire image")
         self.adaptive_radio = QRadioButton("Adaptive")
+        self.adaptive_radio.setToolTip("Use different threshold values for different parts of the image")
         threshold_group.addButton(self.global_radio)
         threshold_group.addButton(self.adaptive_radio)
         
@@ -378,27 +387,30 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.adaptive_radio, 1, 2)
         
         # Threshold value
-        controls_layout.addWidget(QLabel("Value:"), 2, 0)
+        controls_layout.addWidget(QLabel("Threshold Level:"), 2, 0)
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.threshold_slider.setRange(0, 255)
         self.threshold_slider.setValue(127)
+        self.threshold_slider.setToolTip("Pixel intensity threshold (0-255). Pixels above this value become white, below become black")
         controls_layout.addWidget(self.threshold_slider, 2, 1, 1, 3)
         
         self.threshold_label = QLabel("127")
         controls_layout.addWidget(self.threshold_label, 2, 4)
         
         # Morphological operations
-        controls_layout.addWidget(QLabel("Morph Open:"), 3, 0)
+        controls_layout.addWidget(QLabel("Noise Removal:"), 3, 0)
         self.morph_open_slider = QSlider(Qt.Orientation.Horizontal)
         self.morph_open_slider.setRange(0, 10)
+        self.morph_open_slider.setToolTip("Remove small noise pixels (morphological opening)")
         controls_layout.addWidget(self.morph_open_slider, 3, 1, 1, 3)
         
         self.morph_open_label = QLabel("0")
         controls_layout.addWidget(self.morph_open_label, 3, 4)
         
-        controls_layout.addWidget(QLabel("Morph Close:"), 4, 0)
+        controls_layout.addWidget(QLabel("Gap Filling:"), 4, 0)
         self.morph_close_slider = QSlider(Qt.Orientation.Horizontal)
         self.morph_close_slider.setRange(0, 10)
+        self.morph_close_slider.setToolTip("Fill small gaps in objects (morphological closing)")
         controls_layout.addWidget(self.morph_close_slider, 4, 1, 1, 3)
         
         self.morph_close_label = QLabel("0")
@@ -491,6 +503,19 @@ class MainWindow(QMainWindow):
         self.normalize_coords = QCheckBox("Normalize Coordinates")
         self.normalize_coords.setChecked(True)
         settings_layout.addRow(self.normalize_coords)
+        
+        # Rate limiting controls
+        self.rate_limit_enabled = QCheckBox("Enable Rate Limiting")
+        self.rate_limit_enabled.setChecked(True)
+        self.rate_limit_enabled.setToolTip("Limit OSC message rate to prevent overwhelming receivers")
+        settings_layout.addRow(self.rate_limit_enabled)
+        
+        self.max_fps_spin = QDoubleSpinBox()
+        self.max_fps_spin.setRange(1.0, 120.0)
+        self.max_fps_spin.setValue(30.0)
+        self.max_fps_spin.setSuffix(" FPS")
+        self.max_fps_spin.setToolTip("Maximum OSC message rate (frames per second)")
+        settings_layout.addRow("Max OSC Rate:", self.max_fps_spin)
         
         # Connection controls
         conn_layout = QHBoxLayout()
@@ -626,6 +651,8 @@ class MainWindow(QMainWindow):
         self.osc_ip.textChanged.connect(self.on_osc_config_changed)
         self.osc_port.valueChanged.connect(self.on_osc_config_changed)
         self.osc_protocol.currentTextChanged.connect(self.on_osc_config_changed)
+        self.rate_limit_enabled.toggled.connect(self.on_osc_config_changed)
+        self.max_fps_spin.valueChanged.connect(self.on_osc_config_changed)
         
         # Processing thread
         self.processing_thread.frame_processed.connect(self.on_frame_processed)
@@ -792,13 +819,8 @@ class MainWindow(QMainWindow):
             right_crop = self.right_slider.value()
             bottom_crop = self.bottom_slider.value()
             
-            # Debug logging
-            print(f"ROI Lock - Saving crop values: L:{left_crop}, T:{top_crop}, R:{right_crop}, B:{bottom_crop}")
-            
             # Get ROI bounds for x, y, w, h values
             x, y, w, h = self.roi_manager.get_roi_bounds()
-            
-            print(f"ROI Lock - Saving bounds: x:{x}, y:{y}, w:{w}, h:{h}")
             
             # Save all ROI settings including crop values
             self.settings_manager.update_roi_config(
@@ -809,8 +831,6 @@ class MainWindow(QMainWindow):
                 bottom_crop=bottom_crop,
                 x=x, y=y, w=w, h=h
             )
-            
-            print("ROI Lock - Settings saved to config")
         else:
             # Just save the lock state when unlocking
             self.settings_manager.update_roi_config(locked=locked)
@@ -890,7 +910,7 @@ class MainWindow(QMainWindow):
         if self.osc_client:
             self.osc_client.close()
         
-        self.osc_client = OSCClient(ip, port, protocol)
+        self.osc_client = OSCClient(ip, port, protocol, async_mode=False)  # Use sync mode to avoid threading issues
         self.osc_client.set_callbacks(
             on_message_sent=self.on_osc_message_sent,
             on_send_error=self.on_osc_error
@@ -927,7 +947,9 @@ class MainWindow(QMainWindow):
             ip=self.osc_ip.text(),
             port=self.osc_port.value(),
             protocol=self.osc_protocol.currentText().lower(),
-            normalize_coords=self.normalize_coords.isChecked()
+            normalize_coords=self.normalize_coords.isChecked(),
+            rate_limit_enabled=self.rate_limit_enabled.isChecked(),
+            max_fps=self.max_fps_spin.value()
         )
     
     def on_osc_message_sent(self, address: str, args: List[Any]):
@@ -966,10 +988,10 @@ class MainWindow(QMainWindow):
             overlay_image = self.processor.draw_blob_overlay(self.current_roi_frame, self.current_blobs)
             self.overlay_preview.set_image(overlay_image)
         
-        # Send OSC data if enabled
+        # Send OSC data if enabled (with rate limiting)
         if (self.send_on_detect.isChecked() and self.osc_client and 
             self.current_blobs and self.current_frame is not None):
-            self.send_blob_data()
+            self._send_blob_data_rate_limited()
     
     @pyqtSlot(dict)
     def on_stats_updated(self, stats: Dict[str, Any]):
@@ -977,42 +999,66 @@ class MainWindow(QMainWindow):
         self.status_bar.update_fps(stats.get('fps', 0))
         self.status_bar.update_dropped_frames(stats.get('dropped_frames', 0))
     
+    def _send_blob_data_rate_limited(self):
+        """Send blob data with rate limiting."""
+        current_time = time.time()
+        osc_config = self.settings_manager.get_osc_config()
+        
+        # Check if rate limiting is enabled
+        if not osc_config.rate_limit_enabled:
+            self.send_blob_data()
+            return
+        
+        # Update interval based on config
+        self.osc_send_interval = 1.0 / max(1.0, osc_config.max_fps)
+        
+        # Check if enough time has passed since last send
+        if current_time - self.last_osc_send_time >= self.osc_send_interval:
+            self.send_blob_data()
+            self.last_osc_send_time = current_time
+    
     def send_blob_data(self):
-        """Send blob data via OSC."""
+        """Send blob data via OSC with error handling."""
         if not self.osc_client or not self.current_blobs:
             return
         
-        # Get ROI dimensions for normalization
-        x, y, roi_width, roi_height = self.roi_manager.get_roi_bounds()
-        
-        # Get current mappings from table
-        mappings = {}
-        for i in range(self.mapping_table.rowCount()):
-            field_item = self.mapping_table.item(i, 0)
-            address_item = self.mapping_table.item(i, 1)
-            if field_item and address_item:
-                field = field_item.text().lower()
-                address = address_item.text()
-                mappings[field] = address
-        
-        # Get enabled fields
-        enabled_fields = {
-            'center': self.send_center.isChecked(),
-            'position': self.send_position.isChecked(),
-            'size': self.send_size.isChecked(),
-            'area': self.send_area.isChecked(),
-            'polygon': self.send_polygon.isChecked()
-        }
-        
-        # Send data for all blobs
-        self.osc_client.send_multiple_blobs(
-            self.current_blobs,
-            mappings,
-            roi_width,
-            roi_height,
-            self.normalize_coords.isChecked(),
-            enabled_fields
-        )
+        try:
+            # Get ROI dimensions for normalization
+            x, y, roi_width, roi_height = self.roi_manager.get_roi_bounds()
+            
+            # Get current mappings from table
+            mappings = {}
+            for i in range(self.mapping_table.rowCount()):
+                field_item = self.mapping_table.item(i, 0)
+                address_item = self.mapping_table.item(i, 1)
+                if field_item and address_item:
+                    field = field_item.text().lower()
+                    address = address_item.text()
+                    mappings[field] = address
+            
+            # Get enabled fields
+            enabled_fields = {
+                'center': self.send_center.isChecked(),
+                'position': self.send_position.isChecked(),
+                'size': self.send_size.isChecked(),
+                'area': self.send_area.isChecked(),
+                'polygon': self.send_polygon.isChecked()
+            }
+            
+            # Send data for all blobs
+            self.osc_client.send_multiple_blobs(
+                self.current_blobs,
+                mappings,
+                roi_width,
+                roi_height,
+                self.normalize_coords.isChecked(),
+                enabled_fields
+            )
+            
+        except Exception as e:
+            # Log error but don't crash the application
+            logging.error(f"OSC send error: {e}")
+            self.console.append_message(f"OSC send error: {e}", "error")
     
     def load_settings(self):
         """Load settings from file."""
@@ -1028,8 +1074,13 @@ class MainWindow(QMainWindow):
             osc_config = self.settings_manager.get_osc_config()
             
             # Update UI controls
+            self.channel_combo.setCurrentText(threshold_config.channel.capitalize())
+            self.global_radio.setChecked(threshold_config.mode == "global")
+            self.adaptive_radio.setChecked(threshold_config.mode == "adaptive")
             self.blur_slider.setValue(threshold_config.blur)
             self.threshold_slider.setValue(threshold_config.value)
+            self.morph_open_slider.setValue(morph_config.open)
+            self.morph_close_slider.setValue(morph_config.close)
             self.min_area_spin.setValue(blob_config.min_area)
             self.max_area_spin.setValue(blob_config.max_area)
             self.track_ids_checkbox.setChecked(blob_config.track_ids)
@@ -1039,6 +1090,8 @@ class MainWindow(QMainWindow):
             self.osc_protocol.setCurrentText(osc_config.protocol.upper())
             self.normalize_coords.setChecked(osc_config.normalize_coords)
             self.send_on_detect.setChecked(osc_config.send_on_detect)
+            self.rate_limit_enabled.setChecked(osc_config.rate_limit_enabled)
+            self.max_fps_spin.setValue(osc_config.max_fps)
             
             # Update ROI crop values from config - use saved crop values directly
             left_crop = roi_config.left_crop
