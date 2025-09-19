@@ -166,10 +166,6 @@ class MainWindow(QMainWindow):
         
         layout = QVBoxLayout(central_widget)
         
-        # Camera selection row
-        camera_layout = self.create_camera_selection()
-        layout.addLayout(camera_layout)
-        
         # Main tabs
         self.tab_widget = QTabWidget()
         
@@ -220,31 +216,6 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
-    def create_camera_selection(self):
-        """Create camera selection controls."""
-        layout = QHBoxLayout()
-        
-        layout.addWidget(QLabel("Camera:"))
-        
-        self.camera_combo = QComboBox()
-        self.camera_combo.setMinimumWidth(200)
-        layout.addWidget(self.camera_combo)
-        
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self.refresh_cameras)
-        layout.addWidget(self.refresh_button)
-        
-        layout.addWidget(QLabel("Resolution:"))
-        
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["640x480", "1280x720", "1920x1080"])
-        self.resolution_combo.setCurrentText("1280x720")
-        layout.addWidget(self.resolution_combo)
-        
-        layout.addStretch()
-        
-        return layout
-    
     def create_roi_tab(self):
         """Create the ROI selection tab."""
         tab = QWidget()
@@ -269,7 +240,32 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(preview_group, 2)
         
-        # Right side: ROI controls
+        # Right side: Camera and ROI controls
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
+        
+        # Camera settings group
+        camera_group = QGroupBox("Camera Settings")
+        camera_layout = QGridLayout(camera_group)
+        
+        camera_layout.addWidget(QLabel("Camera:"), 0, 0)
+        self.camera_combo = QComboBox()
+        self.camera_combo.setMinimumWidth(200)
+        camera_layout.addWidget(self.camera_combo, 0, 1)
+        
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.clicked.connect(self.refresh_cameras)
+        camera_layout.addWidget(self.refresh_button, 0, 2)
+        
+        camera_layout.addWidget(QLabel("Resolution:"), 1, 0)
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems(["640x480", "1280x720", "1920x1080"])
+        self.resolution_combo.setCurrentText("1280x720")
+        camera_layout.addWidget(self.resolution_combo, 1, 1, 1, 2)
+        
+        controls_layout.addWidget(camera_group)
+        
+        # ROI controls group
         roi_group = QGroupBox("Region of Interest")
         roi_layout = QVBoxLayout(roi_group)
         
@@ -341,7 +337,10 @@ class MainWindow(QMainWindow):
         roi_buttons.addStretch()
         roi_layout.addLayout(roi_buttons)
         
-        layout.addWidget(roi_group, 1)
+        controls_layout.addWidget(roi_group)
+        controls_layout.addStretch()  # Push controls to top
+        
+        layout.addWidget(controls_widget, 1)
         
         return tab
     
@@ -416,6 +415,27 @@ class MainWindow(QMainWindow):
         self.morph_close_label = QLabel("0")
         controls_layout.addWidget(self.morph_close_label, 4, 4)
         
+        # Blob area filtering
+        controls_layout.addWidget(QLabel("Min Area:"), 5, 0)
+        self.min_area_slider = QSlider(Qt.Orientation.Horizontal)
+        self.min_area_slider.setRange(1, 10000)
+        self.min_area_slider.setValue(200)
+        self.min_area_slider.setToolTip("Minimum blob area in pixels")
+        controls_layout.addWidget(self.min_area_slider, 5, 1, 1, 3)
+        
+        self.min_area_label = QLabel("200")
+        controls_layout.addWidget(self.min_area_label, 5, 4)
+        
+        controls_layout.addWidget(QLabel("Max Area:"), 6, 0)
+        self.max_area_slider = QSlider(Qt.Orientation.Horizontal)
+        self.max_area_slider.setRange(1000, 100000)
+        self.max_area_slider.setValue(20000)
+        self.max_area_slider.setToolTip("Maximum blob area in pixels")
+        controls_layout.addWidget(self.max_area_slider, 6, 1, 1, 3)
+        
+        self.max_area_label = QLabel("20000")
+        controls_layout.addWidget(self.max_area_label, 6, 4)
+        
         layout.addWidget(controls_group, 0)  # No stretch - keep compact
         
         # Middle: Preview images with proper scaling - give this the most space
@@ -452,28 +472,20 @@ class MainWindow(QMainWindow):
         # Give the preview area the most space in the layout
         layout.addWidget(preview_splitter, 1)  # stretch factor of 1
         
-        # Bottom: Blob controls
-        blob_group = QGroupBox("Blob Detection")
-        blob_layout = QGridLayout(blob_group)
-        
-        blob_layout.addWidget(QLabel("Min Area:"), 0, 0)
-        self.min_area_spin = QSpinBox()
-        self.min_area_spin.setRange(1, 100000)
-        self.min_area_spin.setValue(200)
-        blob_layout.addWidget(self.min_area_spin, 0, 1)
-        
-        blob_layout.addWidget(QLabel("Max Area:"), 0, 2)
-        self.max_area_spin = QSpinBox()
-        self.max_area_spin.setRange(1, 100000)
-        self.max_area_spin.setValue(20000)
-        blob_layout.addWidget(self.max_area_spin, 0, 3)
+        # Bottom: Blob tracking controls
+        blob_group = QGroupBox("Blob Tracking")
+        blob_layout = QHBoxLayout(blob_group)
         
         self.track_ids_checkbox = QCheckBox("Track IDs")
         self.track_ids_checkbox.setChecked(True)
-        blob_layout.addWidget(self.track_ids_checkbox, 0, 4)
+        self.track_ids_checkbox.setToolTip("Enable blob ID tracking across frames")
+        blob_layout.addWidget(self.track_ids_checkbox)
         
         self.clear_ids_button = QPushButton("Clear IDs")
-        blob_layout.addWidget(self.clear_ids_button, 0, 5)
+        self.clear_ids_button.setToolTip("Reset all blob tracking IDs")
+        blob_layout.addWidget(self.clear_ids_button)
+        
+        blob_layout.addStretch()  # Push controls to the left
         
         layout.addWidget(blob_group, 0)  # No stretch - keep compact
         
@@ -503,19 +515,6 @@ class MainWindow(QMainWindow):
         self.normalize_coords = QCheckBox("Normalize Coordinates")
         self.normalize_coords.setChecked(True)
         settings_layout.addRow(self.normalize_coords)
-        
-        # Rate limiting controls
-        self.rate_limit_enabled = QCheckBox("Enable Rate Limiting")
-        self.rate_limit_enabled.setChecked(True)
-        self.rate_limit_enabled.setToolTip("Limit OSC message rate to prevent overwhelming receivers")
-        settings_layout.addRow(self.rate_limit_enabled)
-        
-        self.max_fps_spin = QDoubleSpinBox()
-        self.max_fps_spin.setRange(1.0, 120.0)
-        self.max_fps_spin.setValue(30.0)
-        self.max_fps_spin.setSuffix(" FPS")
-        self.max_fps_spin.setToolTip("Maximum OSC message rate (frames per second)")
-        settings_layout.addRow("Max OSC Rate:", self.max_fps_spin)
         
         # Connection controls
         conn_layout = QHBoxLayout()
@@ -637,10 +636,10 @@ class MainWindow(QMainWindow):
         self.threshold_slider.valueChanged.connect(self.on_threshold_changed)
         self.morph_open_slider.valueChanged.connect(self.on_morph_open_changed)
         self.morph_close_slider.valueChanged.connect(self.on_morph_close_changed)
+        self.min_area_slider.valueChanged.connect(self.on_min_area_changed)
+        self.max_area_slider.valueChanged.connect(self.on_max_area_changed)
         
         # Blob controls
-        self.min_area_spin.valueChanged.connect(self.on_blob_config_changed)
-        self.max_area_spin.valueChanged.connect(self.on_blob_config_changed)
         self.track_ids_checkbox.toggled.connect(self.on_blob_config_changed)
         self.clear_ids_button.clicked.connect(self.on_clear_ids)
         
@@ -651,8 +650,18 @@ class MainWindow(QMainWindow):
         self.osc_ip.textChanged.connect(self.on_osc_config_changed)
         self.osc_port.valueChanged.connect(self.on_osc_config_changed)
         self.osc_protocol.currentTextChanged.connect(self.on_osc_config_changed)
-        self.rate_limit_enabled.toggled.connect(self.on_osc_config_changed)
-        self.max_fps_spin.valueChanged.connect(self.on_osc_config_changed)
+        
+        # OSC field selection checkboxes
+        self.send_center.toggled.connect(self.on_osc_config_changed)
+        self.send_position.toggled.connect(self.on_osc_config_changed)
+        self.send_size.toggled.connect(self.on_osc_config_changed)
+        self.send_area.toggled.connect(self.on_osc_config_changed)
+        self.send_polygon.toggled.connect(self.on_osc_config_changed)
+        self.send_on_detect.toggled.connect(self.on_osc_config_changed)
+        self.normalize_coords.toggled.connect(self.on_osc_config_changed)
+        
+        # OSC mapping table changes
+        self.mapping_table.itemChanged.connect(self.on_mapping_table_changed)
         
         # Processing thread
         self.processing_thread.frame_processed.connect(self.on_frame_processed)
@@ -822,6 +831,21 @@ class MainWindow(QMainWindow):
             # Get ROI bounds for x, y, w, h values
             x, y, w, h = self.roi_manager.get_roi_bounds()
             
+            # Set max area to ROI area (width * height)
+            roi_area = w * h
+            if roi_area > 0:
+                # Update the max area slider to the ROI area
+                self.max_area_slider.setMaximum(max(roi_area * 2, 100000))  # Allow some headroom
+                self.max_area_slider.setValue(roi_area)
+                self.max_area_label.setText(str(roi_area))
+                
+                # Update the settings
+                self.settings_manager.update_blob_config(
+                    min_area=self.min_area_slider.value(),
+                    max_area=roi_area,
+                    track_ids=self.track_ids_checkbox.isChecked()
+                )
+            
             # Save all ROI settings including crop values
             self.settings_manager.update_roi_config(
                 locked=locked,
@@ -884,12 +908,32 @@ class MainWindow(QMainWindow):
         self.morph_close_label.setText(str(value))
         self.settings_manager.update_morph_config(close=value)
     
+    @pyqtSlot(int)
+    def on_min_area_changed(self, value: int):
+        """Handle min area change."""
+        self.min_area_label.setText(str(value))
+        self.settings_manager.update_blob_config(
+            min_area=value,
+            max_area=self.max_area_slider.value(),
+            track_ids=self.track_ids_checkbox.isChecked()
+        )
+    
+    @pyqtSlot(int)
+    def on_max_area_changed(self, value: int):
+        """Handle max area change."""
+        self.max_area_label.setText(str(value))
+        self.settings_manager.update_blob_config(
+            min_area=self.min_area_slider.value(),
+            max_area=value,
+            track_ids=self.track_ids_checkbox.isChecked()
+        )
+    
     @pyqtSlot()
     def on_blob_config_changed(self):
         """Handle blob configuration changes."""
         self.settings_manager.update_blob_config(
-            min_area=self.min_area_spin.value(),
-            max_area=self.max_area_spin.value(),
+            min_area=self.min_area_slider.value(),
+            max_area=self.max_area_slider.value(),
             track_ids=self.track_ids_checkbox.isChecked()
         )
     
@@ -902,27 +946,40 @@ class MainWindow(QMainWindow):
     # OSC event handlers
     @pyqtSlot()
     def on_osc_connect(self):
-        """Connect to OSC destination."""
-        ip = self.osc_ip.text()
-        port = self.osc_port.value()
-        protocol = self.osc_protocol.currentText().lower()
-        
-        if self.osc_client:
-            self.osc_client.close()
-        
-        self.osc_client = OSCClient(ip, port, protocol, async_mode=False)  # Use sync mode to avoid threading issues
-        self.osc_client.set_callbacks(
-            on_message_sent=self.on_osc_message_sent,
-            on_send_error=self.on_osc_error
-        )
-        
-        if self.osc_client.test_connection():
-            self.console.append_message(f"Connected to OSC {protocol.upper()} {ip}:{port}", "success")
-            self.status_bar.update_connection_status("Connected")
-            self.connect_button.setText("Disconnect")
+        """Connect or disconnect OSC destination."""
+        if self.connect_button.text() == "Connect":
+            # Connect
+            ip = self.osc_ip.text()
+            port = self.osc_port.value()
+            protocol = self.osc_protocol.currentText().lower()
+            
+            if self.osc_client:
+                self.osc_client.close()
+            
+            self.osc_client = OSCClient(ip, port, protocol, async_mode=False)  # Use sync mode to avoid threading issues
+            self.osc_client.set_callbacks(
+                on_message_sent=self.on_osc_message_sent,
+                on_send_error=self.on_osc_error
+            )
+            
+            if self.osc_client.test_connection():
+                self.console.append_message(f"Connected to OSC {protocol.upper()} {ip}:{port}", "success")
+                self.status_bar.update_connection_status("Connected")
+                self.connect_button.setText("Disconnect")
+            else:
+                self.console.append_message("Failed to connect to OSC", "error")
+                self.status_bar.update_connection_status("Error")
         else:
-            self.console.append_message("Failed to connect to OSC", "error")
-            self.status_bar.update_connection_status("Error")
+            # Disconnect
+            if self.osc_client:
+                # Clear callbacks before closing to prevent lingering messages
+                self.osc_client.set_callbacks(None, None)
+                self.osc_client.close()
+                self.osc_client = None
+            
+            self.console.append_message("Disconnected from OSC", "info")
+            self.status_bar.update_connection_status("Disconnected")
+            self.connect_button.setText("Connect")
     
     @pyqtSlot()
     def on_osc_test(self):
@@ -948,17 +1005,43 @@ class MainWindow(QMainWindow):
             port=self.osc_port.value(),
             protocol=self.osc_protocol.currentText().lower(),
             normalize_coords=self.normalize_coords.isChecked(),
-            rate_limit_enabled=self.rate_limit_enabled.isChecked(),
-            max_fps=self.max_fps_spin.value()
+            send_on_detect=self.send_on_detect.isChecked(),
+            rate_limit_enabled=True,  # Always enabled
+            max_fps=30.0,  # Fixed at 30 FPS
+            send_center=self.send_center.isChecked(),
+            send_position=self.send_position.isChecked(),
+            send_size=self.send_size.isChecked(),
+            send_area=self.send_area.isChecked(),
+            send_polygon=self.send_polygon.isChecked()
         )
+    
+    @pyqtSlot()
+    def on_mapping_table_changed(self):
+        """Handle changes to the OSC mapping table."""
+        # Get current mappings from table
+        mappings = {}
+        for i in range(self.mapping_table.rowCount()):
+            field_item = self.mapping_table.item(i, 0)
+            address_item = self.mapping_table.item(i, 1)
+            if field_item and address_item:
+                field = field_item.text().lower()
+                address = address_item.text()
+                mappings[field] = address
+        
+        # Update config with new mappings
+        self.settings_manager.update_osc_config(mappings=mappings)
     
     def on_osc_message_sent(self, address: str, args: List[Any]):
         """Handle OSC message sent callback."""
-        self.console.append_osc_message(address, args)
+        # Only log if we still have an active OSC client
+        if self.osc_client:
+            self.console.append_osc_message(address, args)
     
     def on_osc_error(self, address: str, error: Exception):
         """Handle OSC send error callback."""
-        self.console.append_error(f"OSC send failed: {error}")
+        # Only log if we still have an active OSC client
+        if self.osc_client:
+            self.console.append_error(f"OSC send failed: {error}")
     
     # Processing thread handlers
     @pyqtSlot(object, object, object, list)
@@ -1000,17 +1083,11 @@ class MainWindow(QMainWindow):
         self.status_bar.update_dropped_frames(stats.get('dropped_frames', 0))
     
     def _send_blob_data_rate_limited(self):
-        """Send blob data with rate limiting."""
+        """Send blob data with rate limiting (always enabled at 30 FPS)."""
         current_time = time.time()
-        osc_config = self.settings_manager.get_osc_config()
         
-        # Check if rate limiting is enabled
-        if not osc_config.rate_limit_enabled:
-            self.send_blob_data()
-            return
-        
-        # Update interval based on config
-        self.osc_send_interval = 1.0 / max(1.0, osc_config.max_fps)
+        # Fixed rate limiting at 30 FPS
+        self.osc_send_interval = 1.0 / 30.0
         
         # Check if enough time has passed since last send
         if current_time - self.last_osc_send_time >= self.osc_send_interval:
@@ -1081,8 +1158,8 @@ class MainWindow(QMainWindow):
             self.threshold_slider.setValue(threshold_config.value)
             self.morph_open_slider.setValue(morph_config.open)
             self.morph_close_slider.setValue(morph_config.close)
-            self.min_area_spin.setValue(blob_config.min_area)
-            self.max_area_spin.setValue(blob_config.max_area)
+            self.min_area_slider.setValue(blob_config.min_area)
+            self.max_area_slider.setValue(blob_config.max_area)
             self.track_ids_checkbox.setChecked(blob_config.track_ids)
             
             self.osc_ip.setText(osc_config.ip)
@@ -1090,8 +1167,21 @@ class MainWindow(QMainWindow):
             self.osc_protocol.setCurrentText(osc_config.protocol.upper())
             self.normalize_coords.setChecked(osc_config.normalize_coords)
             self.send_on_detect.setChecked(osc_config.send_on_detect)
-            self.rate_limit_enabled.setChecked(osc_config.rate_limit_enabled)
-            self.max_fps_spin.setValue(osc_config.max_fps)
+            
+            # Load field selection states
+            self.send_center.setChecked(osc_config.send_center)
+            self.send_position.setChecked(osc_config.send_position)
+            self.send_size.setChecked(osc_config.send_size)
+            self.send_area.setChecked(osc_config.send_area)
+            self.send_polygon.setChecked(osc_config.send_polygon)
+            
+            # Load custom mappings into table
+            if osc_config.mappings:
+                mapping_order = ["center", "position", "size", "area", "polygon"]
+                for i, field_key in enumerate(mapping_order):
+                    if i < self.mapping_table.rowCount() and field_key in osc_config.mappings:
+                        address = osc_config.mappings[field_key]
+                        self.mapping_table.setItem(i, 1, QTableWidgetItem(address))
             
             # Update ROI crop values from config - use saved crop values directly
             left_crop = roi_config.left_crop

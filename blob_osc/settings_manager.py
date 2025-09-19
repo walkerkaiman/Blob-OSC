@@ -73,6 +73,12 @@ class OSCConfig:
     normalize_coords: bool = True
     max_fps: float = 30.0  # Maximum OSC message rate (FPS)
     rate_limit_enabled: bool = True
+    # Field selection states
+    send_center: bool = True
+    send_position: bool = False
+    send_size: bool = False
+    send_area: bool = False
+    send_polygon: bool = False
     
     def __post_init__(self):
         if self.mappings is None:
@@ -224,7 +230,12 @@ class SettingsManager:
                 send_on_detect=osc_data.get('send_on_detect', True),
                 normalize_coords=osc_data.get('normalize_coords', True),
                 max_fps=osc_data.get('max_fps', 30.0),
-                rate_limit_enabled=osc_data.get('rate_limit_enabled', True)
+                rate_limit_enabled=osc_data.get('rate_limit_enabled', True),
+                send_center=osc_data.get('send_center', True),
+                send_position=osc_data.get('send_position', False),
+                send_size=osc_data.get('send_size', False),
+                send_area=osc_data.get('send_area', False),
+                send_polygon=osc_data.get('send_polygon', False)
             )
     
     def _to_dict(self) -> Dict[str, Any]:
