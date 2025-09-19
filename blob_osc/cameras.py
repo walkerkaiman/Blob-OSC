@@ -40,17 +40,51 @@ class CameraManager:
         """Enumerate available cameras with friendly names."""
         cameras = []
         
-        # Test up to 10 camera indices
-        for i in range(10):
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                # Try to read a frame to confirm the camera works
-                ret, _ = cap.read()
-                if ret:
-                    friendly_name = self._get_camera_friendly_name(i)
+        # For Windows, try pygrabber first for accurate device names
+        if platform.system() == "Windows":
+            try:
+                from pygrabber.dshow_graph import FilterGraph
+                
+                # Get actual device names from DirectShow
+                graph = FilterGraph()
+                devices = graph.get_input_devices()
+                
+                # Find video devices
+                video_devices = []
+                for device_name in devices:
+                    device_lower = device_name.lower()
+                    if any(keyword in device_lower for keyword in ['camera', 'webcam', 'video', 'capture', 'cam']):
+                        video_devices.append(device_name)
+                
+                # Create camera info for each video device found
+                # Don't test frame reading here as it might fail due to permissions/usage
+                for i, device_name in enumerate(video_devices):
                     backend_id = f"camera://{i}"
-                    cameras.append(CameraInfo(i, friendly_name, backend_id))
-                cap.release()
+                    cameras.append(CameraInfo(i, device_name, backend_id))
+                
+                if cameras:
+                    self.logger.info(f"Found {len(cameras)} cameras using pygrabber")
+                    return cameras
+                    
+            except ImportError:
+                self.logger.debug("pygrabber not available, using OpenCV enumeration")
+            except Exception as e:
+                self.logger.debug(f"pygrabber enumeration failed: {e}")
+        
+        # Fallback: Standard OpenCV enumeration for all platforms
+        for i in range(10):
+            try:
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    # Try to read a frame to confirm the camera works
+                    ret, _ = cap.read()
+                    if ret:
+                        friendly_name = self._get_camera_friendly_name(i)
+                        backend_id = f"camera://{i}"
+                        cameras.append(CameraInfo(i, friendly_name, backend_id))
+                    cap.release()
+            except Exception as e:
+                self.logger.debug(f"Failed to test camera {i}: {e}")
         
         self.logger.info(f"Found {len(cameras)} cameras")
         return cameras
@@ -69,22 +103,144 @@ class CameraManager:
             return f"Camera {camera_id}"
     
     def _get_windows_camera_name(self, camera_id: int) -> str:
-        """Get Windows camera friendly name."""
+        """Get Windows camera friendly name using accurate device enumeration."""
+        # Method 1: Use pygrabber for accurate DirectShow device enumeration
         try:
-            # Try to get camera name from DirectShow backend
+            from pygrabber.dshow_graph import FilterGraph
+            
+            # Create filter graph to enumerate video input devices
+            graph = FilterGraph()
+            devices = graph.get_input_devices()
+            
+            # Find devices that contain video/camera keywords
+            video_devices = []
+            for device_name in devices:
+                device_lower = device_name.lower()
+                if any(keyword in device_lower for keyword in ['camera', 'webcam', 'video', 'capture', 'cam']):
+                    video_devices.append(device_name)
+            
+            # Return the device name if we have one for this camera_id
+            if camera_id < len(video_devices):
+                device_name = video_devices[camera_id]
+                # Clean up common generic names
+                if device_name == "USB Video Device":
+                    return f"USB Camera #{camera_id}"
+                elif "Integrated" in device_name:
+                    return device_name.replace("Integrated", "Built-in")
+                else:
+                    return device_name
+                    
+        except ImportError:
+            self.logger.debug("pygrabber not available, using fallback detection")
+        except Exception as e:
+            self.logger.debug(f"pygrabber device enumeration failed: {e}")
+        
+        # Method 2: Try Windows Registry approach for device names
+        try:
+            import winreg
+            
+            # Look in Windows Registry for video devices
+            registry_path = r"SYSTEM\CurrentControlSet\Control\DeviceClasses\{65e8773d-8f56-11d0-a3b9-00a0c9223196}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, registry_path) as key:
+                device_count = 0
+                i = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(key, i)
+                        if "video" in subkey_name.lower():
+                            if device_count == camera_id:
+                                # Try to extract meaningful name from registry path
+                                if "usb" in subkey_name.lower():
+                                    return f"USB Camera #{camera_id}"
+                                else:
+                                    return f"Video Device #{camera_id}"
+                            device_count += 1
+                        i += 1
+                    except WindowsError:
+                        break
+        except ImportError:
+            pass  # winreg not available (not Windows)
+        except Exception as e:
+            self.logger.debug(f"Registry camera lookup failed: {e}")
+        
+        # Method 3: Enhanced WMI with better parsing
+        try:
+            import subprocess
+            result = subprocess.run([
+                'wmic', 'path', 'Win32_PnPEntity', 'where', 
+                '"Name like \'%camera%\' or Name like \'%webcam%\' or Name like \'%video%\' or PNPClass=\'Camera\'"',
+                'get', 'Name,Description', '/format:csv'
+            ], capture_output=True, text=True, timeout=3, shell=True)
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                device_entries = []
+                
+                for line in lines[1:]:  # Skip header
+                    if ',' in line and line.strip():
+                        parts = line.split(',')
+                        if len(parts) >= 2:
+                            description = parts[0].strip()
+                            name = parts[1].strip()
+                            # Use the more descriptive field
+                            device_name = name if name and len(name) > len(description) else description
+                            if device_name and len(device_name) > 3:
+                                device_entries.append(device_name)
+                
+                if camera_id < len(device_entries):
+                    device_name = device_entries[camera_id]
+                    # Clean up the name
+                    device_name = device_name.replace('USB Video Device', 'USB Webcam')
+                    device_name = device_name.replace('Integrated Camera', 'Integrated Webcam')
+                    return device_name
+                    
+        except Exception as e:
+            self.logger.debug(f"Enhanced WMI lookup failed: {e}")
+        
+        # Method 4: Fallback with camera properties
+        try:
             cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
             if cap.isOpened():
-                # Unfortunately, OpenCV doesn't expose device names directly
-                # This is a limitation we'll work with
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 cap.release()
-                return f"Camera {camera_id}"
+                
+                # Create descriptive name based on resolution
+                if width >= 1920:
+                    return f"HD Camera #{camera_id} (1080p+)"
+                elif width >= 1280:
+                    return f"HD Camera #{camera_id} (720p)"
+                else:
+                    return f"Standard Camera #{camera_id} ({width}x{height})"
         except Exception:
             pass
+        
         return f"Camera {camera_id}"
     
     def _get_macos_camera_name(self, camera_id: int) -> str:
         """Get macOS camera friendly name."""
-        # macOS typically has built-in cameras with recognizable names
+        try:
+            # Try to get camera properties for better identification
+            cap = cv2.VideoCapture(camera_id)
+            if cap.isOpened():
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+                
+                # macOS built-in cameras
+                if camera_id == 0:
+                    if width >= 1920:
+                        return "FaceTime HD Camera (1080p)"
+                    elif width >= 1280:
+                        return "FaceTime HD Camera (720p)"
+                    else:
+                        return "FaceTime Camera"
+                else:
+                    return f"External Camera {camera_id} ({width}x{height})"
+        except Exception:
+            pass
+        
+        # Fallback names
         if camera_id == 0:
             return "FaceTime HD Camera"
         return f"Camera {camera_id}"
@@ -98,10 +254,36 @@ class CameraManager:
             if os.path.exists(video_device):
                 with open(video_device, 'r') as f:
                     name = f.read().strip()
-                    if name:
+                    if name and name != f"video{camera_id}":
+                        # Clean up common generic names
+                        if 'USB' in name and 'Camera' not in name:
+                            return f"{name} (USB Camera)"
+                        elif 'UVC' in name:
+                            return name.replace('UVC', 'USB')
                         return name
         except Exception:
             pass
+        
+        # Try v4l2-ctl if available
+        try:
+            import subprocess
+            result = subprocess.run([
+                'v4l2-ctl', '--list-devices'
+            ], capture_output=True, text=True, timeout=2)
+            
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                device_count = 0
+                for i, line in enumerate(lines):
+                    if line.strip() and not line.startswith('\t') and not line.startswith(' '):
+                        if device_count == camera_id:
+                            device_name = line.strip().rstrip(':')
+                            if device_name and 'video' not in device_name.lower():
+                                return device_name
+                        device_count += 1
+        except Exception:
+            pass
+        
         return f"Camera {camera_id}"
     
     def open_camera(self, camera_id: int) -> bool:

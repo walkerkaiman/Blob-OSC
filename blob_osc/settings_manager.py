@@ -61,6 +61,15 @@ class BlobConfig:
     min_area: int = 200
     max_area: int = 20000
     track_ids: bool = True
+    use_bytetrack: bool = True  # Use ByteTrack instead of simple tracking
+
+
+@dataclass
+class ByteTrackConfig:
+    track_thresh: float = 0.5    # Detection confidence threshold for tracking
+    track_buffer: int = 30       # Number of frames to keep lost tracks
+    match_thresh: float = 0.8    # Matching threshold for association
+    min_box_area: float = 10     # Minimum bounding box area
 
 
 @dataclass
@@ -73,6 +82,7 @@ class OSCConfig:
     normalize_coords: bool = True
     max_fps: float = 30.0  # Maximum OSC message rate (FPS)
     rate_limit_enabled: bool = True
+    auto_connect: bool = False  # Auto-connect on application startup
     # Field selection states
     send_center: bool = True
     send_position: bool = False
@@ -98,6 +108,7 @@ class AppConfig:
     threshold: ThresholdConfig = None
     morph: MorphConfig = None
     blob: BlobConfig = None
+    bytetrack: ByteTrackConfig = None
     osc: OSCConfig = None
     
     def __post_init__(self):
@@ -111,6 +122,8 @@ class AppConfig:
             self.morph = MorphConfig()
         if self.blob is None:
             self.blob = BlobConfig()
+        if self.bytetrack is None:
+            self.bytetrack = ByteTrackConfig()
         if self.osc is None:
             self.osc = OSCConfig()
 
@@ -210,7 +223,18 @@ class SettingsManager:
             self.config.blob = BlobConfig(
                 min_area=blob_data.get('min_area', 200),
                 max_area=blob_data.get('max_area', 20000),
-                track_ids=blob_data.get('track_ids', True)
+                track_ids=blob_data.get('track_ids', True),
+                use_bytetrack=blob_data.get('use_bytetrack', True)
+            )
+        
+        # ByteTrack config
+        if 'bytetrack' in data:
+            bytetrack_data = data['bytetrack']
+            self.config.bytetrack = ByteTrackConfig(
+                track_thresh=bytetrack_data.get('track_thresh', 0.5),
+                track_buffer=bytetrack_data.get('track_buffer', 30),
+                match_thresh=bytetrack_data.get('match_thresh', 0.8),
+                min_box_area=bytetrack_data.get('min_box_area', 10)
             )
         
         # OSC config
@@ -231,6 +255,7 @@ class SettingsManager:
                 normalize_coords=osc_data.get('normalize_coords', True),
                 max_fps=osc_data.get('max_fps', 30.0),
                 rate_limit_enabled=osc_data.get('rate_limit_enabled', True),
+                auto_connect=osc_data.get('auto_connect', False),
                 send_center=osc_data.get('send_center', True),
                 send_position=osc_data.get('send_position', False),
                 send_size=osc_data.get('send_size', False),
@@ -246,6 +271,7 @@ class SettingsManager:
             'threshold': asdict(self.config.threshold),
             'morph': asdict(self.config.morph),
             'blob': asdict(self.config.blob),
+            'bytetrack': asdict(self.config.bytetrack),
             'osc': asdict(self.config.osc)
         }
     
@@ -268,6 +294,10 @@ class SettingsManager:
     def get_blob_config(self) -> BlobConfig:
         """Get blob detection configuration."""
         return self.config.blob
+    
+    def get_bytetrack_config(self) -> ByteTrackConfig:
+        """Get ByteTrack configuration."""
+        return self.config.bytetrack
     
     def get_osc_config(self) -> OSCConfig:
         """Get OSC configuration."""
@@ -306,6 +336,13 @@ class SettingsManager:
         for key, value in kwargs.items():
             if hasattr(self.config.blob, key):
                 setattr(self.config.blob, key, value)
+        self.save_config()
+    
+    def update_bytetrack_config(self, **kwargs) -> None:
+        """Update ByteTrack configuration."""
+        for key, value in kwargs.items():
+            if hasattr(self.config.bytetrack, key):
+                setattr(self.config.bytetrack, key, value)
         self.save_config()
     
     def update_osc_config(self, **kwargs) -> None:

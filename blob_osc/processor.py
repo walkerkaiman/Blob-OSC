@@ -8,6 +8,16 @@ from dataclasses import dataclass
 from collections import defaultdict
 import time
 
+try:
+    from .bytetrack import BYTETracker, Detection as ByteTrackDetection, Track as ByteTrackTrack, create_bytetrack_tracker
+    BYTETRACK_AVAILABLE = True
+except ImportError as e:
+    BYTETRACK_AVAILABLE = False
+    logging.warning(f"ByteTrack not available: {e}")
+    BYTETracker = None
+    ByteTrackDetection = None
+    ByteTrackTrack = None
+
 
 @dataclass
 class BlobInfo:
@@ -21,12 +31,13 @@ class BlobInfo:
     
     def get_center_normalized(self, roi_width: int, roi_height: int) -> Tuple[float, float]:
         """Get normalized center coordinates (0-1)."""
-        return (self.center[0] / roi_width, self.center[1] / roi_height)
+        return (round(self.center[0] / roi_width, 3), round(self.center[1] / roi_height, 3))
     
     def get_bbox_normalized(self, roi_width: int, roi_height: int) -> Tuple[float, float, float, float]:
         """Get normalized bounding box (0-1)."""
         x, y, w, h = self.bbox
-        return (x / roi_width, y / roi_height, w / roi_width, h / roi_height)
+        return (round(x / roi_width, 3), round(y / roi_height, 3), 
+                round(w / roi_width, 3), round(h / roi_height, 3))
 
 
 class BlobTracker:
@@ -139,6 +150,8 @@ class ImageProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.tracker = BlobTracker()
+        self.bytetrack_tracker: Optional[BYTETracker] = None
+        self.use_bytetrack = True
     
     def convert_to_gray(self, image: np.ndarray, channel: str = 'gray') -> np.ndarray:
         """Convert image to grayscale."""
@@ -318,20 +331,29 @@ class ImageProcessor:
         
         # Track blobs if enabled
         if track_ids and blob_config.get('track_ids', True):
-            tracked = self.tracker.update(detections)
+            use_bytetrack = blob_config.get('use_bytetrack', True)
             
-            # Assign tracked IDs to blobs
-            for i, blob in enumerate(blobs):
-                # Find the tracked ID that corresponds to this blob
-                blob_center = (detections[i][0], detections[i][1])
-                for blob_id, tracked_center in tracked.items():
-                    if abs(blob_center[0] - tracked_center[0]) < 1 and abs(blob_center[1] - tracked_center[1]) < 1:
-                        blob.id = blob_id
-                        break
-                
-                # Fallback: assign a temporary ID if tracking failed
-                if blob.id == -1:
-                    blob.id = i
+            if use_bytetrack and self.bytetrack_tracker and BYTETRACK_AVAILABLE:
+                try:
+                    # Convert blobs to ByteTrack detection format
+                    bytetrack_detections = self._convert_blobs_to_detections(blobs)
+                    
+                    # Update ByteTracker
+                    tracks = self.bytetrack_tracker.update(bytetrack_detections)
+                    
+                    # Convert tracks back to blobs with persistent IDs
+                    original_blobs = blobs.copy()  # Keep original blobs for association
+                    blobs = self._convert_tracks_to_blobs(tracks, original_blobs)
+                    
+                except Exception as e:
+                    self.logger.error(f"ByteTrack error: {e}, falling back to simple tracking")
+                    # Fallback to simple tracking
+                    tracked = self.tracker.update(detections)
+                    self._assign_simple_ids(blobs, detections, tracked)
+            else:
+                # Use simple tracking
+                tracked = self.tracker.update(detections)
+                self._assign_simple_ids(blobs, detections, tracked)
         else:
             # Assign simple sequential IDs
             for i, blob in enumerate(blobs):
@@ -359,13 +381,154 @@ class ImageProcessor:
         
         return overlay
     
+    def initialize_bytetrack(self, track_thresh: float = 0.5, track_buffer: int = 30, 
+                           match_thresh: float = 0.8, min_box_area: float = 10) -> bool:
+        """Initialize ByteTrack tracker."""
+        if not BYTETRACK_AVAILABLE:
+            self.logger.warning("ByteTrack not available, using simple tracker")
+            return False
+        
+        try:
+            self.bytetrack_tracker = create_bytetrack_tracker(
+                track_thresh=track_thresh,
+                track_buffer=track_buffer,
+                match_thresh=match_thresh,
+                min_box_area=min_box_area
+            )
+            self.logger.info("ByteTrack tracker initialized")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to initialize ByteTrack: {e}")
+            return False
+    
+    def set_tracking_mode(self, use_bytetrack: bool) -> None:
+        """Set tracking mode (ByteTrack or simple)."""
+        self.use_bytetrack = use_bytetrack and BYTETRACK_AVAILABLE
+        if self.use_bytetrack and self.bytetrack_tracker is None:
+            self.initialize_bytetrack()
+        elif not self.use_bytetrack:
+            # Reset ByteTrack if switching to simple tracking
+            self.bytetrack_tracker = None
+    
+    def _convert_blobs_to_detections(self, blobs: List[BlobInfo]) -> List[ByteTrackDetection]:
+        """Convert blob info to ByteTrack detection format."""
+        detections = []
+        for blob in blobs:
+            # Convert bbox from (x, y, w, h) to (x1, y1, x2, y2)
+            x, y, w, h = blob.bbox
+            x1, y1, x2, y2 = x, y, x + w, y + h
+            
+            # Calculate confidence score based on blob area
+            # Use a more generous confidence calculation
+            # Larger blobs get higher confidence, but ensure all blobs have reasonable confidence
+            area_normalized = min(1.0, blob.area / 5000.0)  # Normalize against smaller max area
+            confidence = max(0.6, area_normalized)  # Higher minimum confidence of 0.6
+            
+            detection = ByteTrackDetection(
+                bbox=np.array([x1, y1, x2, y2], dtype=np.float32),
+                score=confidence,
+                class_id=0
+            )
+            detections.append(detection)
+        
+        return detections
+    
+    def _convert_tracks_to_blobs(self, tracks: List[ByteTrackTrack], original_blobs: List[BlobInfo]) -> List[BlobInfo]:
+        """Convert ByteTrack tracks back to BlobInfo format."""
+        tracked_blobs = []
+        used_blobs = set()
+        
+        # Convert tracks to blobs
+        
+        for track in tracks:
+            # Find the closest original blob to this track
+            track_center = track.get_center()
+            best_blob = None
+            best_blob_idx = -1
+            min_distance = float('inf')
+            
+            for i, blob in enumerate(original_blobs):
+                if i in used_blobs:
+                    continue  # Skip already used blobs
+                    
+                blob_center = blob.center
+                distance = np.sqrt((track_center[0] - blob_center[0])**2 + 
+                                 (track_center[1] - blob_center[1])**2)
+                if distance < min_distance:
+                    min_distance = distance
+                    best_blob = blob
+                    best_blob_idx = i
+            
+            if best_blob and min_distance < 100:  # Increased association distance
+                # Mark this blob as used
+                used_blobs.add(best_blob_idx)
+                
+                # Create new BlobInfo with ByteTrack ID
+                tracked_blob = BlobInfo(
+                    id=track.track_id,
+                    contour=best_blob.contour,
+                    bbox=best_blob.bbox,  # Keep original bbox format (x, y, w, h)
+                    center=best_blob.center,
+                    area=best_blob.area,
+                    polygon=best_blob.polygon
+                )
+                tracked_blobs.append(tracked_blob)
+                self.logger.debug(f"Associated track {track.track_id} with blob at distance {min_distance:.1f}")
+            else:
+                # Create a blob from track prediction if no close original blob found
+                track_bbox = track.get_bbox()
+                x1, y1, x2, y2 = track_bbox
+                x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
+                
+                # Create minimal blob info from track
+                predicted_blob = BlobInfo(
+                    id=track.track_id,
+                    contour=np.array([[[x, y]], [[x+w, y]], [[x+w, y+h]], [[x, y+h]]], dtype=np.int32),
+                    bbox=(x, y, w, h),
+                    center=track_center,
+                    area=w * h,
+                    polygon=[(x, y), (x+w, y), (x+w, y+h), (x, y+h)]
+                )
+                tracked_blobs.append(predicted_blob)
+                self.logger.debug(f"Created predicted blob for track {track.track_id}")
+        
+        # Return tracked blobs
+        return tracked_blobs
+    
+    def _assign_simple_ids(self, blobs: List[BlobInfo], detections: List[Tuple[float, float, float]], tracked: Dict[int, Tuple[float, float]]) -> None:
+        """Assign IDs using simple tracking (fallback method)."""
+        for i, blob in enumerate(blobs):
+            # Find the tracked ID that corresponds to this blob
+            blob_center = (detections[i][0], detections[i][1])
+            for blob_id, tracked_center in tracked.items():
+                if abs(blob_center[0] - tracked_center[0]) < 1 and abs(blob_center[1] - tracked_center[1]) < 1:
+                    blob.id = blob_id
+                    break
+            
+            # Fallback: assign a temporary ID if tracking failed
+            if blob.id == -1:
+                blob.id = i
+    
     def reset_tracker(self) -> None:
         """Reset the blob tracker."""
         self.tracker.reset()
+        if self.bytetrack_tracker:
+            self.bytetrack_tracker.reset()
     
     def get_tracker_stats(self) -> dict:
         """Get tracker statistics."""
-        return {
-            'active_tracks': len(self.tracker.tracked_blobs),
-            'next_id': self.tracker.next_id
-        }
+        if self.use_bytetrack and self.bytetrack_tracker:
+            bytetrack_stats = self.bytetrack_tracker.get_stats()
+            return {
+                'active_tracks': bytetrack_stats['active_tracks'],
+                'lost_tracks': bytetrack_stats['lost_tracks'],
+                'total_tracks': bytetrack_stats['total_tracks'],
+                'frame_id': bytetrack_stats['frame_id'],
+                'tracker_type': 'ByteTrack'
+            }
+        else:
+            return {
+                'active_tracks': len(self.tracker.tracked_blobs),
+                'next_id': self.tracker.next_id,
+                'tracker_type': 'Simple'
+            }

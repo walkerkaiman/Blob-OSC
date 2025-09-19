@@ -36,6 +36,16 @@ class OSCClient:
         
         self._connect()
     
+    @staticmethod
+    def _round_float(value: float, decimals: int = 3) -> float:
+        """Round floating point value to specified decimal places."""
+        return round(value, decimals)
+    
+    @staticmethod
+    def _round_tuple(values: tuple, decimals: int = 3) -> tuple:
+        """Round all floating point values in a tuple."""
+        return tuple(OSCClient._round_float(v, decimals) if isinstance(v, float) else v for v in values)
+    
     def _connect(self) -> bool:
         """Connect to OSC destination."""
         try:
@@ -227,9 +237,13 @@ class OSCClient:
                 address = mappings['center'].format(**format_vars)
                 if normalize_coords and roi_width > 0 and roi_height > 0:
                     cx_norm, cy_norm = blob.get_center_normalized(roi_width, roi_height)
+                    cx_norm = self._round_float(cx_norm)
+                    cy_norm = self._round_float(cy_norm)
                     self.send_message(address, cx_norm, cy_norm)
                 else:
-                    self.send_message(address, blob.center[0], blob.center[1])
+                    cx = self._round_float(blob.center[0])
+                    cy = self._round_float(blob.center[1])
+                    self.send_message(address, cx, cy)
             except Exception as e:
                 self.logger.error(f"Error sending center data: {e}")
         
@@ -238,11 +252,13 @@ class OSCClient:
             try:
                 address = mappings['position'].format(**format_vars)
                 if normalize_coords and roi_width > 0 and roi_height > 0:
-                    x_norm = blob.bbox[0] / roi_width
-                    y_norm = blob.bbox[1] / roi_height
+                    x_norm = self._round_float(blob.bbox[0] / roi_width)
+                    y_norm = self._round_float(blob.bbox[1] / roi_height)
                     self.send_message(address, x_norm, y_norm)
                 else:
-                    self.send_message(address, blob.bbox[0], blob.bbox[1])
+                    x = self._round_float(float(blob.bbox[0]))
+                    y = self._round_float(float(blob.bbox[1]))
+                    self.send_message(address, x, y)
             except Exception as e:
                 self.logger.error(f"Error sending position data: {e}")
         
@@ -251,11 +267,13 @@ class OSCClient:
             try:
                 address = mappings['size'].format(**format_vars)
                 if normalize_coords and roi_width > 0 and roi_height > 0:
-                    w_norm = blob.bbox[2] / roi_width
-                    h_norm = blob.bbox[3] / roi_height
+                    w_norm = self._round_float(blob.bbox[2] / roi_width)
+                    h_norm = self._round_float(blob.bbox[3] / roi_height)
                     self.send_message(address, w_norm, h_norm)
                 else:
-                    self.send_message(address, blob.bbox[2], blob.bbox[3])
+                    w = self._round_float(float(blob.bbox[2]))
+                    h = self._round_float(float(blob.bbox[3]))
+                    self.send_message(address, w, h)
             except Exception as e:
                 self.logger.error(f"Error sending size data: {e}")
         
@@ -266,7 +284,9 @@ class OSCClient:
                 area_value = blob.area
                 if normalize_coords and roi_width > 0 and roi_height > 0:
                     # Normalize area by ROI area
-                    area_value = blob.area / (roi_width * roi_height)
+                    area_value = self._round_float(blob.area / (roi_width * roi_height))
+                else:
+                    area_value = self._round_float(blob.area)
                 self.send_message(address, area_value)
             except Exception as e:
                 self.logger.error(f"Error sending area data: {e}")
@@ -288,10 +308,12 @@ class OSCClient:
         try:
             # Option 1: Send as JSON string (most compatible)
             if normalize_coords and roi_width > 0 and roi_height > 0:
-                norm_polygon = [(x / roi_width, y / roi_height) for x, y in polygon]
+                norm_polygon = [(self._round_float(x / roi_width), self._round_float(y / roi_height)) for x, y in polygon]
                 polygon_str = json.dumps(norm_polygon)
             else:
-                polygon_str = json.dumps(polygon)
+                # Round integer coordinates to float for consistency
+                rounded_polygon = [(self._round_float(float(x)), self._round_float(float(y))) for x, y in polygon]
+                polygon_str = json.dumps(rounded_polygon)
             
             self.send_message(address, polygon_str)
         except Exception as e:
@@ -318,7 +340,7 @@ class OSCClient:
     
     def send_test_message(self, address: str = "/test") -> None:
         """Send a test message."""
-        timestamp = time.time()
+        timestamp = self._round_float(time.time())
         self.send_message(address, "test", timestamp)
     
     def get_message_log(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:

@@ -128,13 +128,14 @@ class MainWindow(QMainWindow):
         self.current_binary = None
         self.current_blobs: List[BlobInfo] = []
         self.cameras: List[CameraInfo] = []
+        self._loading_settings = False
         
         # OSC rate limiting
         self.last_osc_send_time = 0.0
         self.osc_send_interval = 1.0 / 30.0  # Default 30 FPS
         
         
-        # Setup UI and load settings
+        # Setup UI first
         self.setup_ui()
         self.setup_connections()
 
@@ -146,8 +147,32 @@ class MainWindow(QMainWindow):
         # Initialize lock state (default unlocked)
         self._apply_roi_lock_state(False)
 
+        # Load settings after UI and connections are set up
         self.load_settings()
         self.refresh_cameras()
+
+        # Initialize ByteTrack if available
+        bytetrack_config = self.settings_manager.get_bytetrack_config()
+        blob_config = self.settings_manager.get_blob_config()
+        
+        if blob_config.use_bytetrack:
+            success = self.processor.initialize_bytetrack(
+                track_thresh=bytetrack_config.track_thresh,
+                track_buffer=bytetrack_config.track_buffer,
+                match_thresh=bytetrack_config.match_thresh,
+                min_box_area=bytetrack_config.min_box_area
+            )
+            if success:
+                self.processor.set_tracking_mode(True)
+                self.console.append_message("ByteTrack initialized", "success")
+            else:
+                self.console.append_message("ByteTrack failed to initialize, using simple tracking", "warning")
+
+        # Auto-connect to OSC if enabled
+        osc_config = self.settings_manager.get_osc_config()
+        if osc_config.auto_connect:
+            # Use QTimer to delay auto-connect until UI is fully loaded
+            QTimer.singleShot(1000, self.auto_connect_osc)
 
         # Start processing
         self.processing_thread.start()
@@ -472,20 +497,50 @@ class MainWindow(QMainWindow):
         # Give the preview area the most space in the layout
         layout.addWidget(preview_splitter, 1)  # stretch factor of 1
         
-        # Bottom: Blob tracking controls
-        blob_group = QGroupBox("Blob Tracking")
-        blob_layout = QHBoxLayout(blob_group)
+        # Bottom: Bounding box controls
+        blob_group = QGroupBox("Bounding Boxes")
+        blob_layout = QVBoxLayout(blob_group)
+        
+        # First row: basic tracking controls
+        basic_tracking_layout = QHBoxLayout()
         
         self.track_ids_checkbox = QCheckBox("Track IDs")
         self.track_ids_checkbox.setChecked(True)
         self.track_ids_checkbox.setToolTip("Enable blob ID tracking across frames")
-        blob_layout.addWidget(self.track_ids_checkbox)
+        basic_tracking_layout.addWidget(self.track_ids_checkbox)
+        
+        self.use_bytetrack_checkbox = QCheckBox("Use ByteTrack")
+        self.use_bytetrack_checkbox.setChecked(True)
+        self.use_bytetrack_checkbox.setToolTip("Use advanced ByteTrack algorithm for better tracking across occlusions")
+        basic_tracking_layout.addWidget(self.use_bytetrack_checkbox)
         
         self.clear_ids_button = QPushButton("Clear IDs")
         self.clear_ids_button.setToolTip("Reset all blob tracking IDs")
-        blob_layout.addWidget(self.clear_ids_button)
+        basic_tracking_layout.addWidget(self.clear_ids_button)
         
-        blob_layout.addStretch()  # Push controls to the left
+        basic_tracking_layout.addStretch()  # Push controls to the left
+        blob_layout.addLayout(basic_tracking_layout)
+        
+        # Second row: ByteTrack parameters (collapsible)
+        bytetrack_layout = QHBoxLayout()
+        
+        bytetrack_layout.addWidget(QLabel("Track Threshold:"))
+        self.track_thresh_spin = QDoubleSpinBox()
+        self.track_thresh_spin.setRange(0.1, 1.0)
+        self.track_thresh_spin.setSingleStep(0.1)
+        self.track_thresh_spin.setValue(0.5)
+        self.track_thresh_spin.setToolTip("Confidence threshold for starting new tracks")
+        bytetrack_layout.addWidget(self.track_thresh_spin)
+        
+        bytetrack_layout.addWidget(QLabel("Track Buffer:"))
+        self.track_buffer_spin = QSpinBox()
+        self.track_buffer_spin.setRange(1, 100)
+        self.track_buffer_spin.setValue(30)
+        self.track_buffer_spin.setToolTip("Frames to keep lost tracks before deletion")
+        bytetrack_layout.addWidget(self.track_buffer_spin)
+        
+        bytetrack_layout.addStretch()
+        blob_layout.addLayout(bytetrack_layout)
         
         layout.addWidget(blob_group, 0)  # No stretch - keep compact
         
@@ -515,6 +570,11 @@ class MainWindow(QMainWindow):
         self.normalize_coords = QCheckBox("Normalize Coordinates")
         self.normalize_coords.setChecked(True)
         settings_layout.addRow(self.normalize_coords)
+        
+        self.auto_connect_checkbox = QCheckBox("Auto-Connect on Startup")
+        self.auto_connect_checkbox.setChecked(False)
+        self.auto_connect_checkbox.setToolTip("Automatically connect to OSC destination when application starts")
+        settings_layout.addRow(self.auto_connect_checkbox)
         
         # Connection controls
         conn_layout = QHBoxLayout()
@@ -641,7 +701,12 @@ class MainWindow(QMainWindow):
         
         # Blob controls
         self.track_ids_checkbox.toggled.connect(self.on_blob_config_changed)
+        self.use_bytetrack_checkbox.toggled.connect(self.on_blob_config_changed)
         self.clear_ids_button.clicked.connect(self.on_clear_ids)
+        
+        # ByteTrack parameters
+        self.track_thresh_spin.valueChanged.connect(self.on_bytetrack_config_changed)
+        self.track_buffer_spin.valueChanged.connect(self.on_bytetrack_config_changed)
         
         # OSC controls
         self.connect_button.clicked.connect(self.on_osc_connect)
@@ -659,6 +724,7 @@ class MainWindow(QMainWindow):
         self.send_polygon.toggled.connect(self.on_osc_config_changed)
         self.send_on_detect.toggled.connect(self.on_osc_config_changed)
         self.normalize_coords.toggled.connect(self.on_osc_config_changed)
+        self.auto_connect_checkbox.toggled.connect(self.on_osc_config_changed)
         
         # OSC mapping table changes
         self.mapping_table.itemChanged.connect(self.on_mapping_table_changed)
@@ -934,8 +1000,32 @@ class MainWindow(QMainWindow):
         self.settings_manager.update_blob_config(
             min_area=self.min_area_slider.value(),
             max_area=self.max_area_slider.value(),
-            track_ids=self.track_ids_checkbox.isChecked()
+            track_ids=self.track_ids_checkbox.isChecked(),
+            use_bytetrack=self.use_bytetrack_checkbox.isChecked()
         )
+        
+        # Update processor tracking mode
+        self.processor.set_tracking_mode(self.use_bytetrack_checkbox.isChecked())
+    
+    @pyqtSlot()
+    def on_bytetrack_config_changed(self):
+        """Handle ByteTrack configuration changes."""
+        self.settings_manager.update_bytetrack_config(
+            track_thresh=self.track_thresh_spin.value(),
+            track_buffer=self.track_buffer_spin.value()
+        )
+        
+        # Reinitialize ByteTrack with new parameters
+        if self.use_bytetrack_checkbox.isChecked():
+            bytetrack_config = self.settings_manager.get_bytetrack_config()
+            # Reset existing tracker before reinitializing
+            self.processor.bytetrack_tracker = None
+            self.processor.initialize_bytetrack(
+                track_thresh=bytetrack_config.track_thresh,
+                track_buffer=bytetrack_config.track_buffer,
+                match_thresh=bytetrack_config.match_thresh,
+                min_box_area=bytetrack_config.min_box_area
+            )
     
     @pyqtSlot()
     def on_clear_ids(self):
@@ -981,6 +1071,16 @@ class MainWindow(QMainWindow):
             self.status_bar.update_connection_status("Disconnected")
             self.connect_button.setText("Connect")
     
+    def auto_connect_osc(self):
+        """Auto-connect to OSC on startup."""
+        try:
+            # Only auto-connect if not already connected
+            if not self.osc_client and self.connect_button.text() == "Connect":
+                self.console.append_message("Auto-connecting to OSC...", "info")
+                self.on_osc_connect()
+        except Exception as e:
+            self.console.append_message(f"Auto-connect failed: {e}", "error")
+    
     @pyqtSlot()
     def on_osc_test(self):
         """Send test OSC message."""
@@ -1000,12 +1100,17 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def on_osc_config_changed(self):
         """Handle OSC configuration changes."""
+        # Don't save during settings loading
+        if self._loading_settings:
+            return
+            
         self.settings_manager.update_osc_config(
             ip=self.osc_ip.text(),
             port=self.osc_port.value(),
             protocol=self.osc_protocol.currentText().lower(),
             normalize_coords=self.normalize_coords.isChecked(),
             send_on_detect=self.send_on_detect.isChecked(),
+            auto_connect=self.auto_connect_checkbox.isChecked(),
             rate_limit_enabled=True,  # Always enabled
             max_fps=30.0,  # Fixed at 30 FPS
             send_center=self.send_center.isChecked(),
@@ -1067,9 +1172,13 @@ class MainWindow(QMainWindow):
             self.binary_preview.set_image(self.current_binary)
         
         # Update overlay preview with blob detection - use already-cropped frame
-        if self.current_roi_frame is not None and self.current_blobs:
-            overlay_image = self.processor.draw_blob_overlay(self.current_roi_frame, self.current_blobs)
-            self.overlay_preview.set_image(overlay_image)
+        if self.current_roi_frame is not None:
+            if self.current_blobs:
+                overlay_image = self.processor.draw_blob_overlay(self.current_roi_frame, self.current_blobs)
+                self.overlay_preview.set_image(overlay_image)
+            else:
+                # Show the frame even if no blobs detected
+                self.overlay_preview.set_image(self.current_roi_frame)
         
         # Send OSC data if enabled (with rate limiting)
         if (self.send_on_detect.isChecked() and self.osc_client and 
@@ -1140,6 +1249,7 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         """Load settings from file."""
         try:
+            self._loading_settings = True
             self.settings_manager.load_config()
             
             # Apply loaded settings to UI
@@ -1148,6 +1258,7 @@ class MainWindow(QMainWindow):
             threshold_config = self.settings_manager.get_threshold_config()
             morph_config = self.settings_manager.get_morph_config()
             blob_config = self.settings_manager.get_blob_config()
+            bytetrack_config = self.settings_manager.get_bytetrack_config()
             osc_config = self.settings_manager.get_osc_config()
             
             # Update UI controls
@@ -1161,12 +1272,18 @@ class MainWindow(QMainWindow):
             self.min_area_slider.setValue(blob_config.min_area)
             self.max_area_slider.setValue(blob_config.max_area)
             self.track_ids_checkbox.setChecked(blob_config.track_ids)
+            self.use_bytetrack_checkbox.setChecked(blob_config.use_bytetrack)
+            
+            # Load ByteTrack settings
+            self.track_thresh_spin.setValue(bytetrack_config.track_thresh)
+            self.track_buffer_spin.setValue(bytetrack_config.track_buffer)
             
             self.osc_ip.setText(osc_config.ip)
             self.osc_port.setValue(osc_config.port)
             self.osc_protocol.setCurrentText(osc_config.protocol.upper())
             self.normalize_coords.setChecked(osc_config.normalize_coords)
             self.send_on_detect.setChecked(osc_config.send_on_detect)
+            self.auto_connect_checkbox.setChecked(osc_config.auto_connect)
             
             # Load field selection states
             self.send_center.setChecked(osc_config.send_center)
@@ -1218,12 +1335,14 @@ class MainWindow(QMainWindow):
             # Apply the lock state to sliders without saving
             self._apply_roi_lock_state(roi_config.locked)
             
+            self._loading_settings = False
             self.console.append_message("Settings loaded", "success")
             self.status_bar.update_config_status("Loaded")
             
         except Exception as e:
             self.console.append_message(f"Failed to load settings: {e}", "error")
             self.status_bar.update_config_status("Error")
+            self._loading_settings = False
     
     def save_settings(self):
         """Save current settings to file."""
