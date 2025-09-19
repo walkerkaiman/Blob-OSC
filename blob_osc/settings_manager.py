@@ -26,6 +26,11 @@ class ROIConfig:
     w: int = 640
     h: int = 480
     locked: bool = False
+    # Crop slider values (pixels from each edge)
+    left_crop: int = 0
+    top_crop: int = 0
+    right_crop: int = 0
+    bottom_crop: int = 0
 
 
 @dataclass
@@ -131,14 +136,18 @@ class SettingsManager:
     def save_config(self) -> None:
         """Save configuration to JSON file."""
         if not self._auto_save_enabled:
+            print("Settings Manager - Auto-save disabled, skipping save")
             return
             
         try:
             data = self._to_dict()
+            print(f"Settings Manager - Saving ROI data: {data.get('roi', {})}")
             with open(self.config_path, 'w') as f:
                 json.dump(data, f, indent=2)
+            print(f"Settings Manager - Saved config to {self.config_path}")
             self.logger.debug(f"Saved config to {self.config_path}")
         except Exception as e:
+            print(f"Settings Manager - Save failed: {e}")
             self.logger.error(f"Failed to save config: {e}")
     
     def _load_from_dict(self, data: Dict[str, Any]) -> None:
@@ -160,7 +169,11 @@ class SettingsManager:
                 y=roi_data.get('y', 0),
                 w=roi_data.get('w', 640),
                 h=roi_data.get('h', 480),
-                locked=roi_data.get('locked', False)
+                locked=roi_data.get('locked', False),
+                left_crop=roi_data.get('left_crop', 0),
+                top_crop=roi_data.get('top_crop', 0),
+                right_crop=roi_data.get('right_crop', 0),
+                bottom_crop=roi_data.get('bottom_crop', 0)
             )
         
         # Threshold config
@@ -256,9 +269,14 @@ class SettingsManager:
     
     def update_roi_config(self, **kwargs) -> None:
         """Update ROI configuration."""
+        print(f"Settings Manager - Updating ROI config with: {kwargs}")
         for key, value in kwargs.items():
             if hasattr(self.config.roi, key):
                 setattr(self.config.roi, key, value)
+                print(f"Settings Manager - Set {key} = {value}")
+            else:
+                print(f"Settings Manager - Warning: ROI config has no attribute '{key}'")
+        print(f"Settings Manager - Final ROI config: {self.config.roi}")
         self.save_config()
     
     def update_threshold_config(self, **kwargs) -> None:

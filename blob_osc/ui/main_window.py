@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QAction, QFont, QIcon
 
 from ..cameras import CameraManager, CameraInfo
-from ..roi import ROIManager
+from ..simple_roi import SimpleROI
 from ..processor import ImageProcessor, BlobInfo
 from ..osc_client import OSCClient
 from ..settings_manager import SettingsManager
@@ -22,19 +22,19 @@ from .widgets import VideoPreview, ConsoleWidget, StatusBar, CollapsibleSection
 class ProcessingThread(QThread):
     """Thread for image processing to keep UI responsive."""
     
-    frame_processed = pyqtSignal(object, object, list)  # original_frame, binary_frame, blobs
+    frame_processed = pyqtSignal(object, object, object, list)  # original_frame, roi_frame, binary_frame, blobs
     stats_updated = pyqtSignal(dict)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.camera_manager: Optional[CameraManager] = None
-        self.roi_manager: Optional[ROIManager] = None
+        self.roi_manager: Optional[SimpleROI] = None
         self.processor: Optional[ImageProcessor] = None
         self.settings_manager: Optional[SettingsManager] = None
         self.running = False
         self.processing_enabled = True
         
-    def setup(self, camera_manager: CameraManager, roi_manager: ROIManager,
+    def setup(self, camera_manager: CameraManager, roi_manager: SimpleROI,
               processor: ImageProcessor, settings_manager: SettingsManager):
         """Setup the processing thread with required components."""
         self.camera_manager = camera_manager
@@ -59,7 +59,7 @@ class ProcessingThread(QThread):
             
             try:
                 # Apply ROI
-                roi_frame = self.roi_manager.apply_roi(frame) if self.roi_manager else frame
+                roi_frame = self.roi_manager.apply_crop(frame) if self.roi_manager else frame
                 if roi_frame is None:
                     self.msleep(16)
                     continue
@@ -76,8 +76,8 @@ class ProcessingThread(QThread):
                     blob_config.__dict__
                 )
                 
-                # Emit results
-                self.frame_processed.emit(roi_frame, binary_frame, blobs)
+                # Emit results - pass both original frame and cropped frame
+                self.frame_processed.emit(frame, roi_frame, binary_frame, blobs)
                 
                 # Emit stats
                 camera_stats = self.camera_manager.get_stats()
@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
         
         # Core components
         self.camera_manager = CameraManager()
-        self.roi_manager = ROIManager()
+        self.roi_manager = SimpleROI()
         self.processor = ImageProcessor()
         self.osc_client: Optional[OSCClient] = None
         self.settings_manager = SettingsManager()
@@ -123,22 +123,33 @@ class MainWindow(QMainWindow):
         
         # UI state
         self.current_frame = None
+        self.current_roi_frame = None
         self.current_binary = None
         self.current_blobs: List[BlobInfo] = []
         self.cameras: List[CameraInfo] = []
         
+        
         # Setup UI and load settings
         self.setup_ui()
         self.setup_connections()
+
+        # Set overlay callback for ROI preview
+        self.roi_preview.set_overlay_callback(
+            lambda img: self.roi_manager.draw_crop_overlay(img)
+        )
+
+        # Initialize lock state (default unlocked)
+        self._apply_roi_lock_state(False)
+
         self.load_settings()
         self.refresh_cameras()
-        
+
         # Start processing
         self.processing_thread.start()
     
     def setup_ui(self):
         """Setup the main UI."""
-        self.setWindowTitle("Webcam-to-OSC")
+        self.setWindowTitle("Blob OSC")
         self.setMinimumSize(1200, 800)
         
         # Create menu bar
@@ -269,6 +280,7 @@ class MainWindow(QMainWindow):
         self.left_slider = QSlider(Qt.Orientation.Horizontal)
         self.left_slider.setRange(0, 1000)
         self.left_slider.setValue(0)
+        self.left_slider.setTracking(True)  # Keep tracking for real-time preview
         roi_controls.addWidget(self.left_slider, 0, 1)
         self.left_label = QLabel("0px")
         self.left_label.setMinimumWidth(60)
@@ -279,6 +291,7 @@ class MainWindow(QMainWindow):
         self.top_slider = QSlider(Qt.Orientation.Horizontal)
         self.top_slider.setRange(0, 1000)
         self.top_slider.setValue(0)
+        self.top_slider.setTracking(True)  # Keep tracking for real-time preview
         roi_controls.addWidget(self.top_slider, 1, 1)
         self.top_label = QLabel("0px")
         self.top_label.setMinimumWidth(60)
@@ -289,6 +302,7 @@ class MainWindow(QMainWindow):
         self.right_slider = QSlider(Qt.Orientation.Horizontal)
         self.right_slider.setRange(0, 1000)
         self.right_slider.setValue(0)
+        self.right_slider.setTracking(True)  # Keep tracking for real-time preview
         roi_controls.addWidget(self.right_slider, 2, 1)
         self.right_label = QLabel("0px")
         self.right_label.setMinimumWidth(60)
@@ -299,6 +313,7 @@ class MainWindow(QMainWindow):
         self.bottom_slider = QSlider(Qt.Orientation.Horizontal)
         self.bottom_slider.setRange(0, 1000)
         self.bottom_slider.setValue(0)
+        self.bottom_slider.setTracking(True)  # Keep tracking for real-time preview
         roi_controls.addWidget(self.bottom_slider, 3, 1)
         self.bottom_label = QLabel("0px")
         self.bottom_label.setMinimumWidth(60)
@@ -320,16 +335,6 @@ class MainWindow(QMainWindow):
         
         roi_buttons.addStretch()
         roi_layout.addLayout(roi_buttons)
-        
-        # Cropped preview
-        cropped_group = QGroupBox("Cropped Preview")
-        cropped_layout = QVBoxLayout(cropped_group)
-        
-        self.cropped_preview = VideoPreview()
-        self.cropped_preview.setMaximumSize(320, 240)
-        cropped_layout.addWidget(self.cropped_preview)
-        
-        roi_layout.addWidget(cropped_group)
         
         layout.addWidget(roi_group, 1)
         
@@ -399,32 +404,41 @@ class MainWindow(QMainWindow):
         self.morph_close_label = QLabel("0")
         controls_layout.addWidget(self.morph_close_label, 4, 4)
         
-        layout.addWidget(controls_group)
+        layout.addWidget(controls_group, 0)  # No stretch - keep compact
         
-        # Middle: Preview images
-        preview_layout = QHBoxLayout()
+        # Middle: Preview images with proper scaling - give this the most space
+        preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        preview_splitter.setChildrenCollapsible(False)
         
         # Binary preview
         binary_group = QGroupBox("Binary Image")
         binary_layout = QVBoxLayout(binary_group)
+        binary_layout.setContentsMargins(5, 5, 5, 5)
         
         self.binary_preview = VideoPreview()
-        self.binary_preview.setMaximumSize(400, 300)
+        self.binary_preview.setMinimumSize(320, 240)
+        # Remove maximum size constraint to allow proper scaling
         binary_layout.addWidget(self.binary_preview)
         
-        preview_layout.addWidget(binary_group)
+        preview_splitter.addWidget(binary_group)
         
         # Overlay preview
         overlay_group = QGroupBox("Blob Detection")
         overlay_layout = QVBoxLayout(overlay_group)
+        overlay_layout.setContentsMargins(5, 5, 5, 5)
         
         self.overlay_preview = VideoPreview()
-        self.overlay_preview.setMaximumSize(400, 300)
+        self.overlay_preview.setMinimumSize(320, 240)
+        # Remove maximum size constraint to allow proper scaling
         overlay_layout.addWidget(self.overlay_preview)
         
-        preview_layout.addWidget(overlay_group)
+        preview_splitter.addWidget(overlay_group)
         
-        layout.addLayout(preview_layout)
+        # Set equal sizes for both preview panes
+        preview_splitter.setSizes([1, 1])
+        
+        # Give the preview area the most space in the layout
+        layout.addWidget(preview_splitter, 1)  # stretch factor of 1
         
         # Bottom: Blob controls
         blob_group = QGroupBox("Blob Detection")
@@ -449,7 +463,7 @@ class MainWindow(QMainWindow):
         self.clear_ids_button = QPushButton("Clear IDs")
         blob_layout.addWidget(self.clear_ids_button, 0, 5)
         
-        layout.addWidget(blob_group)
+        layout.addWidget(blob_group, 0)  # No stretch - keep compact
         
         return tab
     
@@ -577,11 +591,17 @@ class MainWindow(QMainWindow):
         self.reset_roi_button.clicked.connect(self.on_reset_roi)
         self.lock_roi_checkbox.toggled.connect(self.on_roi_lock_changed)
         
-        # ROI sliders
-        self.left_slider.valueChanged.connect(self.on_roi_slider_changed)
-        self.top_slider.valueChanged.connect(self.on_roi_slider_changed)
-        self.right_slider.valueChanged.connect(self.on_roi_slider_changed)
-        self.bottom_slider.valueChanged.connect(self.on_roi_slider_changed)
+        # ROI sliders - only update on release to prevent accumulation
+        self.left_slider.sliderReleased.connect(self.on_roi_slider_released)
+        self.top_slider.sliderReleased.connect(self.on_roi_slider_released)
+        self.right_slider.sliderReleased.connect(self.on_roi_slider_released)
+        self.bottom_slider.sliderReleased.connect(self.on_roi_slider_released)
+
+        # For real-time visual feedback, connect valueChanged to preview update only
+        self.left_slider.valueChanged.connect(self.on_roi_slider_preview)
+        self.top_slider.valueChanged.connect(self.on_roi_slider_preview)
+        self.right_slider.valueChanged.connect(self.on_roi_slider_preview)
+        self.bottom_slider.valueChanged.connect(self.on_roi_slider_preview)
         
         # Processing controls
         self.pause_button.toggled.connect(self.on_pause_toggled)
@@ -665,75 +685,141 @@ class MainWindow(QMainWindow):
     
     # ROI event handlers
     @pyqtSlot()
-    def on_roi_slider_changed(self):
-        """Handle ROI slider changes."""
-        # Get raw slider values - no modification
+    def on_roi_slider_preview(self):
+        """Handle ROI slider preview - real-time visual feedback only."""
+        # Get current slider values for preview
         left = self.left_slider.value()
         top = self.top_slider.value()
         right = self.right_slider.value()
         bottom = self.bottom_slider.value()
-        
-        # Update labels to show exact slider values
+
+        # Update labels in real-time
         self.left_label.setText(f"{left}px")
         self.top_label.setText(f"{top}px")
         self.right_label.setText(f"{right}px")
         self.bottom_label.setText(f"{bottom}px")
-        
-        # Update ROI manager with slider values
-        self.roi_manager.set_crop_pixels(left, top, right, bottom)
-        self.update_roi_info()
+
+        # Update ROI manager for visual preview only
+        self.roi_manager.set_crop_values(left, top, right, bottom)
+
+    @pyqtSlot()
+    def on_roi_slider_released(self):
+        """Handle ROI slider release - commit changes and save config."""
+        # Get final slider values
+        left = self.left_slider.value()
+        top = self.top_slider.value()
+        right = self.right_slider.value()
+        bottom = self.bottom_slider.value()
+
+        # Update ROI manager (this persists the changes)
+        self.roi_manager.set_crop_values(left, top, right, bottom)
+
+        # Save to config - include crop values
+        x, y, w, h = self.roi_manager.get_roi_bounds()
+        self.settings_manager.update_roi_config(
+            x=x, y=y, w=w, h=h, 
+            locked=self.lock_roi_checkbox.isChecked(),
+            left_crop=left, top_crop=top, 
+            right_crop=right, bottom_crop=bottom
+        )
     
     @pyqtSlot()
     def on_use_roi(self):
         """Use current ROI settings."""
-        roi = self.roi_manager.get_roi()
-        if roi:
-            self.settings_manager.update_roi_config(**roi.__dict__)
-            self.console.append_message("ROI settings saved", "success")
+        x, y, w, h = self.roi_manager.get_roi_bounds()
+        self.settings_manager.update_roi_config(x=x, y=y, w=w, h=h)
+        self.console.append_message("ROI settings saved", "success")
     
     @pyqtSlot()
     def on_reset_roi(self):
         """Reset ROI to full frame."""
-        self.roi_manager.reset_roi()
-        
-        # Update sliders (block signals to prevent feedback)
+        self.roi_manager.reset()
+
+        # Reset sliders (block signals to prevent feedback)
         self.left_slider.blockSignals(True)
         self.top_slider.blockSignals(True)
         self.right_slider.blockSignals(True)
         self.bottom_slider.blockSignals(True)
-        
+
         self.left_slider.setValue(0)
         self.top_slider.setValue(0)
         self.right_slider.setValue(0)
         self.bottom_slider.setValue(0)
-        
+
         self.left_slider.blockSignals(False)
         self.top_slider.blockSignals(False)
         self.right_slider.blockSignals(False)
         self.bottom_slider.blockSignals(False)
-        
+
         # Update labels
         self.left_label.setText("0px")
         self.top_label.setText("0px")
         self.right_label.setText("0px")
         self.bottom_label.setText("0px")
+
+        # Save to config - include reset crop values (all zeros)
+        x, y, w, h = self.roi_manager.get_roi_bounds()
+        self.settings_manager.update_roi_config(
+            x=x, y=y, w=w, h=h, 
+            locked=self.lock_roi_checkbox.isChecked(),
+            left_crop=0, top_crop=0, right_crop=0, bottom_crop=0
+        )
         
         self.update_roi_info()
     
+    def _apply_roi_lock_state(self, locked: bool):
+        """Apply ROI lock state to UI without saving."""
+        # Enable/disable ROI sliders based on lock state
+        self.left_slider.setEnabled(not locked)
+        self.top_slider.setEnabled(not locked)
+        self.right_slider.setEnabled(not locked)
+        self.bottom_slider.setEnabled(not locked)
+        
+        # Also disable the ROI control buttons when locked
+        self.use_roi_button.setEnabled(not locked)
+        self.reset_roi_button.setEnabled(not locked)
+
     @pyqtSlot(bool)
     def on_roi_lock_changed(self, locked: bool):
-        """Handle ROI lock change."""
-        self.roi_manager.set_locked(locked)
-        self.settings_manager.update_roi_config(locked=locked)
+        """Handle ROI lock change from user interaction."""
+        # Apply the UI state
+        self._apply_roi_lock_state(locked)
+        
+        # When locking, save current slider values to config
+        if locked:
+            left_crop = self.left_slider.value()
+            top_crop = self.top_slider.value()
+            right_crop = self.right_slider.value()
+            bottom_crop = self.bottom_slider.value()
+            
+            # Debug logging
+            print(f"ROI Lock - Saving crop values: L:{left_crop}, T:{top_crop}, R:{right_crop}, B:{bottom_crop}")
+            
+            # Get ROI bounds for x, y, w, h values
+            x, y, w, h = self.roi_manager.get_roi_bounds()
+            
+            print(f"ROI Lock - Saving bounds: x:{x}, y:{y}, w:{w}, h:{h}")
+            
+            # Save all ROI settings including crop values
+            self.settings_manager.update_roi_config(
+                locked=locked,
+                left_crop=left_crop,
+                top_crop=top_crop,
+                right_crop=right_crop,
+                bottom_crop=bottom_crop,
+                x=x, y=y, w=w, h=h
+            )
+            
+            print("ROI Lock - Settings saved to config")
+        else:
+            # Just save the lock state when unlocking
+            self.settings_manager.update_roi_config(locked=locked)
     
     def update_roi_info(self):
         """Update ROI information display."""
-        roi = self.roi_manager.get_roi()
-        if roi:
-            left, top, right, bottom = self.roi_manager.get_crop_pixels()
-            self.roi_info.setText(f"ROI: ({roi.x}, {roi.y}) {roi.w}x{roi.h} - Crop: {left}px,{top}px,{right}px,{bottom}px")
-        else:
-            self.roi_info.setText("ROI: Not set")
+        x, y, w, h = self.roi_manager.get_roi_bounds()
+        left, top, right, bottom = self.roi_manager.get_crop_values()
+        self.roi_info.setText(f"ROI: ({x}, {y}) {w}x{h} - Crop: L:{left}px T:{top}px R:{right}px B:{bottom}px")
     
     
     # Processing event handlers
@@ -853,43 +939,32 @@ class MainWindow(QMainWindow):
         self.console.append_error(f"OSC send failed: {error}")
     
     # Processing thread handlers
-    @pyqtSlot(object, object, list)
-    def on_frame_processed(self, original_frame, binary_frame, blobs: List[BlobInfo]):
+    @pyqtSlot(object, object, object, list)
+    def on_frame_processed(self, original_frame, roi_frame, binary_frame, blobs: List[BlobInfo]):
         """Handle processed frame from processing thread."""
-        self.current_frame = original_frame
+        self.current_frame = original_frame  # Store original uncropped frame
+        self.current_roi_frame = roi_frame   # Store already-cropped frame
         self.current_binary = binary_frame
         self.current_blobs = blobs
         
         # Update video previews
         if self.current_frame is not None:
-            # Update ROI image size
+            # Set image size only if it changed to avoid constant updates
             h, w = self.current_frame.shape[:2]
-            self.roi_manager.set_image_size(w, h)
+            if (self.roi_manager.image_width != w or self.roi_manager.image_height != h):
+                self.roi_manager.set_image_size(w, h)
             
-            # Don't update slider ranges automatically to prevent accumulation
-            # self.update_slider_ranges(w, h)
-            
-            # Set overlay callback for ROI preview
-            self.roi_preview.set_overlay_callback(
-                lambda img: self.roi_manager.draw_overlay(img)
-            )
-            self.roi_preview.set_image(self.current_frame)
-            
-            # Update cropped preview
-            cropped = self.roi_manager.apply_roi(self.current_frame)
-            if cropped is not None:
-                self.cropped_preview.set_image(cropped)
+            # Update ROI preview with overlay (shows full image with crop rectangles)
+            self.roi_preview.set_image(self.current_frame)  # Full uncropped image
         
         # Update binary preview
         if self.current_binary is not None:
             self.binary_preview.set_image(self.current_binary)
         
-        # Update overlay preview with blob detection
-        if self.current_frame is not None and self.current_blobs:
-            cropped = self.roi_manager.apply_roi(self.current_frame)
-            if cropped is not None:
-                overlay_image = self.processor.draw_blob_overlay(cropped, self.current_blobs)
-                self.overlay_preview.set_image(overlay_image)
+        # Update overlay preview with blob detection - use already-cropped frame
+        if self.current_roi_frame is not None and self.current_blobs:
+            overlay_image = self.processor.draw_blob_overlay(self.current_roi_frame, self.current_blobs)
+            self.overlay_preview.set_image(overlay_image)
         
         # Send OSC data if enabled
         if (self.send_on_detect.isChecked() and self.osc_client and 
@@ -908,9 +983,7 @@ class MainWindow(QMainWindow):
             return
         
         # Get ROI dimensions for normalization
-        roi = self.roi_manager.get_roi()
-        roi_width = roi.w if roi else self.current_frame.shape[1]
-        roi_height = roi.h if roi else self.current_frame.shape[0]
+        x, y, roi_width, roi_height = self.roi_manager.get_roi_bounds()
         
         # Get current mappings from table
         mappings = {}
@@ -967,13 +1040,40 @@ class MainWindow(QMainWindow):
             self.normalize_coords.setChecked(osc_config.normalize_coords)
             self.send_on_detect.setChecked(osc_config.send_on_detect)
             
-            # Update ROI (don't update crop values to avoid interfering with sliders)
-            self.roi_manager.set_roi(roi_config.x, roi_config.y, roi_config.w, roi_config.h, update_crop_values=False)
-            self.roi_manager.set_locked(roi_config.locked)
+            # Update ROI crop values from config - use saved crop values directly
+            left_crop = roi_config.left_crop
+            top_crop = roi_config.top_crop
+            right_crop = roi_config.right_crop
+            bottom_crop = roi_config.bottom_crop
+
+            # Set crop values on ROI manager
+            self.roi_manager.set_crop_values(left_crop, top_crop, right_crop, bottom_crop)
+
+            # Update slider positions (block signals to prevent feedback)
+            self.left_slider.blockSignals(True)
+            self.top_slider.blockSignals(True)
+            self.right_slider.blockSignals(True)
+            self.bottom_slider.blockSignals(True)
+
+            self.left_slider.setValue(left_crop)
+            self.top_slider.setValue(top_crop)
+            self.right_slider.setValue(right_crop)
+            self.bottom_slider.setValue(bottom_crop)
+
+            self.left_slider.blockSignals(False)
+            self.top_slider.blockSignals(False)
+            self.right_slider.blockSignals(False)
+            self.bottom_slider.blockSignals(False)
+
+            # Update labels to match loaded values
+            self.left_label.setText(f"{left_crop}px")
+            self.top_label.setText(f"{top_crop}px")
+            self.right_label.setText(f"{right_crop}px")
+            self.bottom_label.setText(f"{bottom_crop}px")
+
             self.lock_roi_checkbox.setChecked(roi_config.locked)
-            
-            # Note: Don't update sliders from ROI config to avoid accumulation
-            # The sliders should maintain their current values
+            # Apply the lock state to sliders without saving
+            self._apply_roi_lock_state(roi_config.locked)
             
             self.console.append_message("Settings loaded", "success")
             self.status_bar.update_config_status("Loaded")
@@ -1007,8 +1107,8 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Show about dialog."""
         QMessageBox.about(
-            self, "About Webcam-to-OSC",
-            "Webcam-to-OSC v1.0\n\n"
+            self, "About Blob OSC",
+            "Blob OSC v1.0\n\n"
             "A real-time blob detection and OSC streaming application.\n"
             "Captures webcam feed, detects blobs, and sends data via OSC."
         )

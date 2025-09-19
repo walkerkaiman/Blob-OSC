@@ -25,7 +25,7 @@ def setup_logging() -> logging.Logger:
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    return logging.getLogger('webcam_osc')
+    return logging.getLogger('blob_osc')
 
 
 def clamp(value: float, min_val: float, max_val: float) -> float:

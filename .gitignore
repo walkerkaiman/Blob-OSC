@@ -161,7 +161,7 @@ cython_debug/
 # VS Code
 .vscode/
 
-# Application-specific files
+# Blob OSC Application-specific files
 config.json
 config.json.bak
 *.log
@@ -198,7 +198,7 @@ moc_*.h
 qrc_*.cpp
 ui_*.h
 
-# Application data
+# Blob OSC Application data
 logs/
 recordings/
 captures/

@@ -20,9 +20,9 @@ def setup_application():
     )
     
     app = QApplication(sys.argv)
-    app.setApplicationName("Webcam-to-OSC")
+    app.setApplicationName("Blob OSC")
     app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("Webcam-OSC")
+    app.setOrganizationName("Blob-OSC")
     
     # Set application icon if available
     # app.setWindowIcon(QIcon("icon.png"))
@@ -33,7 +33,7 @@ def setup_application():
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Webcam-to-OSC: Real-time blob detection and OSC streaming"
+        description="Blob OSC: Real-time blob detection and OSC streaming"
     )
     
     parser.add_argument(
@@ -88,7 +88,7 @@ def main():
     logger = setup_logging()
     logger.setLevel(getattr(logging, args.log_level))
     
-    logger.info("Starting Webcam-to-OSC application")
+    logger.info("Starting Blob OSC application")
     logger.info(f"Configuration file: {args.config}")
     logger.info(f"Log level: {args.log_level}")
     

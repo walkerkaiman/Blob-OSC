@@ -1,4 +1,4 @@
-"""Custom widgets for the webcam-to-OSC application."""
+"""Custom widgets for the Blob OSC application."""
 
 import cv2
 import numpy as np

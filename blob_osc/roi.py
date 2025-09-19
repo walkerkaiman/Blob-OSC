@@ -211,28 +211,64 @@ class ROIManager:
     
     def draw_overlay(self, image: np.ndarray, color: Tuple[int, int, int] = (0, 255, 0), 
                     thickness: int = 2) -> np.ndarray:
-        """Draw ROI overlay on image."""
-        if self.roi is None or not self.roi.is_valid():
-            return image
-        
+        """Draw visual crop preview overlay - shows what WOULD be cropped without affecting the image."""
         overlay = image.copy()
+        h, w = image.shape[:2]
         
-        # Draw ROI rectangle
-        cv2.rectangle(overlay, 
-                     (self.roi.x, self.roi.y), 
-                     (self.roi.x + self.roi.w, self.roi.y + self.roi.h),
-                     color, thickness)
+        # Draw semi-transparent crop preview rectangles
+        crop_color = (50, 50, 200)  # Red for areas that would be cropped
+        border_color = (0, 255, 0)  # Green borders
         
-        # Draw coordinates text and crop values
-        text = f"ROI: ({self.roi.x}, {self.roi.y}) {self.roi.w}x{self.roi.h}"
-        crop_text = f"Crop: L:{self.left_crop}px T:{self.top_crop}px R:{self.right_crop}px B:{self.bottom_crop}px"
+        # Left crop rectangle (width = left_crop)
+        if self.left_crop > 0:
+            rect_width = min(self.left_crop, w)
+            cv2.rectangle(overlay, (0, 0), (rect_width, h), crop_color, -1)
+            cv2.rectangle(overlay, (0, 0), (rect_width, h), border_color, 2)
         
-        cv2.putText(overlay, text, (self.roi.x, max(self.roi.y - 10, 15)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        cv2.putText(overlay, crop_text, (self.roi.x, max(self.roi.y - 30, 35)),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+        # Right crop rectangle (width = right_crop)
+        if self.right_crop > 0:
+            rect_width = min(self.right_crop, w)
+            start_x = w - rect_width
+            cv2.rectangle(overlay, (start_x, 0), (w, h), crop_color, -1)
+            cv2.rectangle(overlay, (start_x, 0), (w, h), border_color, 2)
         
-        return overlay
+        # Top crop rectangle (height = top_crop)
+        if self.top_crop > 0:
+            rect_height = min(self.top_crop, h)
+            cv2.rectangle(overlay, (0, 0), (w, rect_height), crop_color, -1)
+            cv2.rectangle(overlay, (0, 0), (w, rect_height), border_color, 2)
+        
+        # Bottom crop rectangle (height = bottom_crop)
+        if self.bottom_crop > 0:
+            rect_height = min(self.bottom_crop, h)
+            start_y = h - rect_height
+            cv2.rectangle(overlay, (0, start_y), (w, h), crop_color, -1)
+            cv2.rectangle(overlay, (0, start_y), (w, h), border_color, 2)
+        
+        # Draw the resulting ROI border (yellow outline of remaining area)
+        if self.roi and self.roi.is_valid():
+            cv2.rectangle(overlay, 
+                         (self.roi.x, self.roi.y), 
+                         (self.roi.x + self.roi.w, self.roi.y + self.roi.h),
+                         (0, 255, 255), 3)  # Yellow border for final ROI
+        
+        # Blend with original image for semi-transparency
+        alpha = 0.4
+        result = cv2.addWeighted(image, 1 - alpha, overlay, alpha, 0)
+        
+        # Draw text info with better positioning
+        info_y = 25
+        text = f"Preview - Crop Rectangles: L:{self.left_crop}px T:{self.top_crop}px R:{self.right_crop}px B:{self.bottom_crop}px"
+        roi_text = f"Resulting ROI: {self.roi.w if self.roi else w}x{self.roi.h if self.roi else h}"
+        
+        # White outline + black text for readability
+        cv2.putText(result, text, (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(result, text, (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+        
+        cv2.putText(result, roi_text, (10, info_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(result, roi_text, (10, info_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        return result
     
     def set_locked(self, locked: bool) -> None:
         """Lock or unlock ROI editing."""
