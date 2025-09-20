@@ -477,17 +477,3 @@ Blob-OSC/
 ├── run.py            # Application launcher
 └── README.md         # This comprehensive documentation
 ```
-
-## Support
-
-For issues, feature requests, or questions:
-1. Check the troubleshooting section above
-2. Review console messages for error details
-3. Verify your OSC receiver configuration
-4. Test with minimal settings (default values)
-
----
-
-## License
-
-This project is open source. See individual file headers for specific licensing information.
