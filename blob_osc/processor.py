@@ -375,9 +375,9 @@ class ImageProcessor:
             cx, cy = int(blob.center[0]), int(blob.center[1])
             cv2.circle(overlay, (cx, cy), 3, color, -1)
             
-            # Draw blob ID and area
-            label = f"ID:{blob.id} A:{int(blob.area)}"
-            cv2.putText(overlay, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            # Draw blob ID only in green text
+            label = f"ID:{blob.id}"
+            cv2.putText(overlay, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
         return overlay
     
