@@ -39,6 +39,7 @@ class ThresholdConfig:
     channel: str = "gray"  # "gray", "red", "green", "blue"
     value: int = 127
     blur: int = 3
+    invert: bool = False  # Whether to invert the threshold image
     adaptive: Dict[str, Any] = None
     
     def __post_init__(self):
@@ -202,6 +203,7 @@ class SettingsManager:
                 channel=thresh_data.get('channel', 'gray'),
                 value=thresh_data.get('value', 127),
                 blur=thresh_data.get('blur', 3),
+                invert=thresh_data.get('invert', False),
                 adaptive=thresh_data.get('adaptive', {
                     "method": "gaussian",
                     "blocksize": 11,

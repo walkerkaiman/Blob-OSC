@@ -180,13 +180,16 @@ class ImageProcessor:
         
         return cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
     
-    def threshold_global(self, image: np.ndarray, threshold_value: int) -> np.ndarray:
+    def threshold_global(self, image: np.ndarray, threshold_value: int, invert: bool = False) -> np.ndarray:
         """Apply global thresholding."""
-        _, binary = cv2.threshold(image, threshold_value, 255, cv2.THRESH_BINARY)
+        if invert:
+            _, binary = cv2.threshold(image, threshold_value, 255, cv2.THRESH_BINARY_INV)
+        else:
+            _, binary = cv2.threshold(image, threshold_value, 255, cv2.THRESH_BINARY)
         return binary
     
     def threshold_adaptive(self, image: np.ndarray, method: str = 'gaussian', 
-                          block_size: int = 11, C: float = 2) -> np.ndarray:
+                          block_size: int = 11, C: float = 2, invert: bool = False) -> np.ndarray:
         """Apply adaptive thresholding."""
         # Ensure block size is odd and >= 3
         if block_size % 2 == 0:
@@ -195,8 +198,11 @@ class ImageProcessor:
         
         adaptive_method = cv2.ADAPTIVE_THRESH_GAUSSIAN_C if method == 'gaussian' else cv2.ADAPTIVE_THRESH_MEAN_C
         
+        # Choose threshold type
+        threshold_type = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+        
         return cv2.adaptiveThreshold(
-            image, 255, adaptive_method, cv2.THRESH_BINARY, block_size, C
+            image, 255, adaptive_method, threshold_type, block_size, C
         )
     
     def apply_morphology(self, image: np.ndarray, open_kernel: int = 0, 
@@ -280,15 +286,17 @@ class ImageProcessor:
         
         # Apply thresholding
         threshold_mode = threshold_config.get('mode', 'global')
+        invert = threshold_config.get('invert', False)
         if threshold_mode == 'global':
-            binary = self.threshold_global(gray, threshold_config.get('value', 127))
+            binary = self.threshold_global(gray, threshold_config.get('value', 127), invert)
         else:  # adaptive
             adaptive_params = threshold_config.get('adaptive', {})
             binary = self.threshold_adaptive(
                 gray,
                 adaptive_params.get('method', 'gaussian'),
                 adaptive_params.get('blocksize', 11),
-                adaptive_params.get('C', 2)
+                adaptive_params.get('C', 2),
+                invert
             )
         
         # Apply morphological operations
