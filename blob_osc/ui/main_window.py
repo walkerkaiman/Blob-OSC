@@ -443,22 +443,22 @@ class MainWindow(QMainWindow):
         # Blob area filtering
         controls_layout.addWidget(QLabel("Min Area:"), 5, 0)
         self.min_area_slider = QSlider(Qt.Orientation.Horizontal)
-        self.min_area_slider.setRange(1, 10000)
-        self.min_area_slider.setValue(200)
-        self.min_area_slider.setToolTip("Minimum blob area in pixels")
+        self.min_area_slider.setRange(0, 100)  # 0-100 for 0.0-1.0 normalized values
+        self.min_area_slider.setValue(2)  # Default to 0.02 (2% of ROI area)
+        self.min_area_slider.setToolTip("Minimum blob area as fraction of ROI area (0.0-1.0)")
         controls_layout.addWidget(self.min_area_slider, 5, 1, 1, 3)
         
-        self.min_area_label = QLabel("200")
+        self.min_area_label = QLabel("0.02")
         controls_layout.addWidget(self.min_area_label, 5, 4)
         
         controls_layout.addWidget(QLabel("Max Area:"), 6, 0)
         self.max_area_slider = QSlider(Qt.Orientation.Horizontal)
-        self.max_area_slider.setRange(1000, 100000)
-        self.max_area_slider.setValue(20000)
-        self.max_area_slider.setToolTip("Maximum blob area in pixels")
+        self.max_area_slider.setRange(0, 100)  # 0-100 for 0.0-1.0 normalized values
+        self.max_area_slider.setValue(100)  # Default to 1.0 (100% of ROI area)
+        self.max_area_slider.setToolTip("Maximum blob area as fraction of ROI area (0.0-1.0)")
         controls_layout.addWidget(self.max_area_slider, 6, 1, 1, 3)
         
-        self.max_area_label = QLabel("20000")
+        self.max_area_label = QLabel("1.00")
         controls_layout.addWidget(self.max_area_label, 6, 4)
         
         layout.addWidget(controls_group, 0)  # No stretch - keep compact
@@ -897,18 +897,22 @@ class MainWindow(QMainWindow):
             # Get ROI bounds for x, y, w, h values
             x, y, w, h = self.roi_manager.get_roi_bounds()
             
-            # Set max area to ROI area (width * height)
+            # Calculate ROI area for normalization
             roi_area = w * h
             if roi_area > 0:
-                # Update the max area slider to the ROI area
-                self.max_area_slider.setMaximum(max(roi_area * 2, 100000))  # Allow some headroom
-                self.max_area_slider.setValue(roi_area)
-                self.max_area_label.setText(str(roi_area))
+                # Keep current normalized values when ROI changes
+                # The pixel values will be recalculated based on new ROI area
+                current_min_normalized = self.min_area_slider.value() / 100.0
+                current_max_normalized = self.max_area_slider.value() / 100.0
                 
-                # Update the settings
+                # Update labels with current normalized values
+                self.min_area_label.setText(f"{current_min_normalized:.2f}")
+                self.max_area_label.setText(f"{current_max_normalized:.2f}")
+                
+                # Update the settings with converted pixel values
                 self.settings_manager.update_blob_config(
-                    min_area=self.min_area_slider.value(),
-                    max_area=roi_area,
+                    min_area=self._normalized_to_pixel_area(current_min_normalized, roi_area),
+                    max_area=self._normalized_to_pixel_area(current_max_normalized, roi_area),
                     track_ids=self.track_ids_checkbox.isChecked()
                 )
             
@@ -974,32 +978,64 @@ class MainWindow(QMainWindow):
         self.morph_close_label.setText(str(value))
         self.settings_manager.update_morph_config(close=value)
     
+    def _normalized_to_pixel_area(self, normalized_value: float, roi_area: int) -> int:
+        """Convert normalized area value (0.0-1.0) to pixel area."""
+        return int(normalized_value * roi_area)
+    
+    def _pixel_to_normalized_area(self, pixel_value: int, roi_area: int) -> float:
+        """Convert pixel area to normalized value (0.0-1.0)."""
+        if roi_area <= 0:
+            return 0.0
+        return pixel_value / roi_area
+
     @pyqtSlot(int)
     def on_min_area_changed(self, value: int):
         """Handle min area change."""
-        self.min_area_label.setText(str(value))
+        normalized_value = value / 100.0  # Convert 0-100 to 0.0-1.0
+        self.min_area_label.setText(f"{normalized_value:.2f}")
+        
+        # Get current ROI area for conversion
+        roi_bounds = self.roi_manager.get_roi_bounds()
+        roi_area = roi_bounds[2] * roi_bounds[3]  # w * h
+        
+        # Convert to pixel value for settings
+        pixel_min_area = self._normalized_to_pixel_area(normalized_value, roi_area)
+        
         self.settings_manager.update_blob_config(
-            min_area=value,
-            max_area=self.max_area_slider.value(),
+            min_area=pixel_min_area,
+            max_area=self._normalized_to_pixel_area(self.max_area_slider.value() / 100.0, roi_area),
             track_ids=self.track_ids_checkbox.isChecked()
         )
     
     @pyqtSlot(int)
     def on_max_area_changed(self, value: int):
         """Handle max area change."""
-        self.max_area_label.setText(str(value))
+        normalized_value = value / 100.0  # Convert 0-100 to 0.0-1.0
+        self.max_area_label.setText(f"{normalized_value:.2f}")
+        
+        # Get current ROI area for conversion
+        roi_bounds = self.roi_manager.get_roi_bounds()
+        roi_area = roi_bounds[2] * roi_bounds[3]  # w * h
+        
+        # Convert to pixel value for settings
+        pixel_max_area = self._normalized_to_pixel_area(normalized_value, roi_area)
+        
         self.settings_manager.update_blob_config(
-            min_area=self.min_area_slider.value(),
-            max_area=value,
+            min_area=self._normalized_to_pixel_area(self.min_area_slider.value() / 100.0, roi_area),
+            max_area=pixel_max_area,
             track_ids=self.track_ids_checkbox.isChecked()
         )
     
     @pyqtSlot()
     def on_blob_config_changed(self):
         """Handle blob configuration changes."""
+        # Get current ROI area for conversion
+        roi_bounds = self.roi_manager.get_roi_bounds()
+        roi_area = roi_bounds[2] * roi_bounds[3]  # w * h
+        
         self.settings_manager.update_blob_config(
-            min_area=self.min_area_slider.value(),
-            max_area=self.max_area_slider.value(),
+            min_area=self._normalized_to_pixel_area(self.min_area_slider.value() / 100.0, roi_area),
+            max_area=self._normalized_to_pixel_area(self.max_area_slider.value() / 100.0, roi_area),
             track_ids=self.track_ids_checkbox.isChecked(),
             use_bytetrack=self.use_bytetrack_checkbox.isChecked()
         )
@@ -1269,8 +1305,30 @@ class MainWindow(QMainWindow):
             self.threshold_slider.setValue(threshold_config.value)
             self.morph_open_slider.setValue(morph_config.open)
             self.morph_close_slider.setValue(morph_config.close)
-            self.min_area_slider.setValue(blob_config.min_area)
-            self.max_area_slider.setValue(blob_config.max_area)
+            # Convert pixel values to normalized values for sliders
+            roi_bounds = self.roi_manager.get_roi_bounds()
+            roi_area = roi_bounds[2] * roi_bounds[3]  # w * h
+            
+            if roi_area > 0:
+                min_normalized = int(self._pixel_to_normalized_area(blob_config.min_area, roi_area) * 100)
+                max_normalized = int(self._pixel_to_normalized_area(blob_config.max_area, roi_area) * 100)
+                
+                # Clamp to valid range
+                min_normalized = max(0, min(100, min_normalized))
+                max_normalized = max(0, min(100, max_normalized))
+                
+                self.min_area_slider.setValue(min_normalized)
+                self.max_area_slider.setValue(max_normalized)
+                
+                # Update labels
+                self.min_area_label.setText(f"{min_normalized / 100.0:.2f}")
+                self.max_area_label.setText(f"{max_normalized / 100.0:.2f}")
+            else:
+                # Fallback to default values if ROI area is 0
+                self.min_area_slider.setValue(2)  # 0.02
+                self.max_area_slider.setValue(100)  # 1.0
+                self.min_area_label.setText("0.02")
+                self.max_area_label.setText("1.00")
             self.track_ids_checkbox.setChecked(blob_config.track_ids)
             self.use_bytetrack_checkbox.setChecked(blob_config.use_bytetrack)
             
