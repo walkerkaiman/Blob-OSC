@@ -97,7 +97,7 @@ class OSCConfig:
 
 @dataclass
 class PerformanceConfig:
-    target_fps: float = 5.0  # Target FPS for Raspberry Pi optimization
+    target_fps: float = 30.0  # Target FPS for Raspberry Pi optimization
     max_camera_fps: float = 30.0  # Maximum camera FPS
     processing_enabled: bool = True
     camera_module_enabled: bool = True  # Enable Pi Camera Module support

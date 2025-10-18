@@ -45,7 +45,8 @@ class WebBlobApp:
         self.cameras: List[CameraInfo] = []
         
         # Performance settings
-        self.target_fps = 5.0  # Default 5 FPS for Pi
+        self.settings_manager.load_config()
+        self.target_fps = self.settings_manager.config.performance.target_fps
         self.last_frame_time = 0
         self.frame_interval = 1.0 / self.target_fps
         
@@ -182,7 +183,7 @@ class WebBlobApp:
                     if 'target_fps' in perf_data:
                         self.target_fps = perf_data['target_fps']
                         self.frame_interval = 1.0 / self.target_fps
-                        self.settings_manager.config.performance = perf_data
+                    self.settings_manager.update_performance_config(**perf_data)
                 
                 return jsonify({'status': 'success'})
             except Exception as e:

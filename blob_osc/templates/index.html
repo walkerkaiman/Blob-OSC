@@ -464,6 +464,16 @@
                         <label for="flip-y">Flip Y (Vertical)</label>
                     </div>
 
+                    <h3 style="margin-top: 30px;">⚡ Performance</h3>
+                    
+                    <div class="form-group">
+                        <label>Target FPS:</label>
+                        <div class="slider-container">
+                            <input type="range" id="fps-slider" class="slider" min="1" max="60" value="30" oninput="updateFPS()">
+                            <span id="fps-value" class="slider-value">30 FPS</span>
+                        </div>
+                    </div>
+
                     <h3 style="margin-top: 30px;">🎯 Region of Interest</h3>
                     
                     <div class="form-group">
@@ -772,7 +782,7 @@
                 const config = await response.json();
                 currentConfig = config;
                 applyConfigToUI(config);
-                updateTargetFPS(config.performance?.target_fps || 5);
+                updateTargetFPS(config.performance?.target_fps || 30);
             } catch (error) {
                 console.error('Error loading config:', error);
                 addConsoleMessage('Failed to load configuration', 'error');
@@ -786,6 +796,13 @@
                     `${config.camera.resolution[0]}x${config.camera.resolution[1]}`;
                 document.getElementById('flip-x').checked = config.camera.flip_x || false;
                 document.getElementById('flip-y').checked = config.camera.flip_y || false;
+            }
+            
+            // Apply performance config
+            if (config.performance) {
+                const fps = config.performance.target_fps || 30;
+                document.getElementById('fps-slider').value = fps;
+                document.getElementById('fps-value').textContent = fps + ' FPS';
             }
             
             // Apply ROI config
@@ -920,6 +937,15 @@
             updateConfig('camera', {
                 flip_x: document.getElementById('flip-x').checked,
                 flip_y: document.getElementById('flip-y').checked
+            });
+        }
+        
+        function updateFPS() {
+            const fps = parseInt(document.getElementById('fps-slider').value);
+            document.getElementById('fps-value').textContent = fps + ' FPS';
+            
+            updateConfig('performance', {
+                target_fps: fps
             });
         }
         
