@@ -240,6 +240,21 @@
             color: #667eea;
         }
 
+        .slider:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .slider:disabled::-webkit-slider-thumb {
+            background: #888;
+            cursor: not-allowed;
+        }
+
+        .slider:disabled::-moz-range-thumb {
+            background: #888;
+            cursor: not-allowed;
+        }
+
         .checkbox-group {
             display: flex;
             align-items: center;
@@ -509,7 +524,6 @@
                     </div>
 
                     <div style="margin-top: 20px;">
-                        <button class="btn" onclick="useROI()">Use ROI</button>
                         <button class="btn btn-secondary" onclick="resetROI()">Reset ROI</button>
                         <div class="checkbox-group" style="margin-top: 15px;">
                             <input type="checkbox" id="lock-roi" onchange="toggleROILock()">
@@ -813,6 +827,9 @@
                 document.getElementById('bottom-slider').value = config.roi.bottom_crop || 0;
                 document.getElementById('lock-roi').checked = config.roi.locked || false;
                 updateROIValues();
+                
+                // Apply lock state to sliders
+                updateROISliderState();
             }
             
             // Apply threshold config
@@ -994,8 +1011,11 @@
         function toggleROILock() {
             const locked = document.getElementById('lock-roi').checked;
             updateConfig('roi', { locked });
-            
-            // Disable/enable sliders
+            updateROISliderState();
+        }
+        
+        function updateROISliderState() {
+            const locked = document.getElementById('lock-roi').checked;
             const sliders = ['left-slider', 'top-slider', 'right-slider', 'bottom-slider'];
             sliders.forEach(id => {
                 document.getElementById(id).disabled = locked;
