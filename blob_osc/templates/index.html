@@ -530,6 +530,11 @@
                         </div>
                     </div>
 
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="invert-threshold" onchange="updateInvert()">
+                        <label for="invert-threshold">Invert Threshold</label>
+                    </div>
+
                     <div class="form-group">
                         <label>Noise Removal:</label>
                         <div class="slider-container">
@@ -796,6 +801,7 @@
                 document.getElementById('channel-select').value = config.threshold.channel || 'gray';
                 document.getElementById('blur-slider').value = config.threshold.blur || 3;
                 document.getElementById('threshold-slider').value = config.threshold.value || 127;
+                document.getElementById('invert-threshold').checked = config.threshold.invert || false;
                 document.getElementById('blur-value').textContent = config.threshold.blur || 3;
                 document.getElementById('threshold-value').textContent = config.threshold.value || 127;
             }
@@ -973,6 +979,11 @@
             const value = document.getElementById('threshold-slider').value;
             document.getElementById('threshold-value').textContent = value;
             updateConfig('threshold', { value: parseInt(value) });
+        }
+        
+        function updateInvert() {
+            const invert = document.getElementById('invert-threshold').checked;
+            updateConfig('threshold', { invert: invert });
         }
         
         function updateMorphOpen() {
