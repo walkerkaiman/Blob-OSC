@@ -374,12 +374,13 @@
 
         .blob-item {
             background: #444;
-            padding: 10px;
-            margin: 5px 0;
-            border-radius: 4px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.4;
         }
 
         @media (max-width: 768px) {
@@ -1211,10 +1212,29 @@
             blobs.forEach(blob => {
                 const blobItem = document.createElement('div');
                 blobItem.className = 'blob-item';
+                
+                // Display normalized coordinates (0-1 range)
+                const centerX = blob.center[0].toFixed(3);
+                const centerY = blob.center[1].toFixed(3);
+                const areaNorm = blob.area.toFixed(3);
+                
+                // If bbox data is available, show it too
+                let bboxInfo = '';
+                if (blob.bbox) {
+                    const x = blob.bbox[0].toFixed(3);
+                    const y = blob.bbox[1].toFixed(3);
+                    const w = blob.bbox[2].toFixed(3);
+                    const h = blob.bbox[3].toFixed(3);
+                    bboxInfo = `<br><small>BBox: (${x}, ${y}) ${w}×${h}</small>`;
+                }
+                
                 blobItem.innerHTML = `
-                    <span>Blob ID: ${blob.id}</span>
-                    <span>Center: (${blob.center[0].toFixed(1)}, ${blob.center[1].toFixed(1)})</span>
-                    <span>Area: ${blob.area.toFixed(0)}</span>
+                    <div style="margin-bottom: 8px;">
+                        <strong>Blob ID: ${blob.id}</strong>
+                        <br><small>Center: (${centerX}, ${centerY})</small>
+                        <br><small>Area: ${areaNorm} ${blob.area_pixels ? `(${blob.area_pixels}px)` : ''}</small>
+                        ${bboxInfo}
+                    </div>
                 `;
                 blobList.appendChild(blobItem);
             });

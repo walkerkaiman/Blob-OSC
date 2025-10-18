@@ -470,11 +470,41 @@ class WebBlobApp:
                 else:
                     overlay_data = binary_data
                 
+                # Get ROI dimensions for normalization
+                roi_bounds = self.roi_manager.get_roi_bounds()
+                roi_width = roi_bounds[2] if roi_bounds else 640
+                roi_height = roi_bounds[3] if roi_bounds else 480
+                
+                # Prepare normalized blob data
+                normalized_blobs = []
+                for b in blobs:
+                    # Normalize center coordinates
+                    center_norm = (round(b.center[0] / roi_width, 3), round(b.center[1] / roi_height, 3))
+                    # Normalize area
+                    area_norm = round(b.area / (roi_width * roi_height), 3)
+                    # Get normalized bbox
+                    bbox_norm = (
+                        round(b.bbox[0] / roi_width, 3),  # x
+                        round(b.bbox[1] / roi_height, 3),  # y
+                        round(b.bbox[2] / roi_width, 3),   # w
+                        round(b.bbox[3] / roi_height, 3)   # h
+                    )
+                    
+                    normalized_blobs.append({
+                        'id': b.id,
+                        'center': center_norm,
+                        'bbox': bbox_norm,
+                        'area': area_norm,
+                        'area_pixels': int(b.area)  # Keep raw pixel area for reference
+                    })
+                
                 self.socketio.emit('frames_update', {
                     'frame': frame_data,
                     'binary': binary_data,
                     'overlay': overlay_data,
-                    'blobs': [{'id': b.id, 'center': b.center, 'area': b.area} for b in blobs]
+                    'blobs': normalized_blobs,
+                    'roi_width': roi_width,
+                    'roi_height': roi_height
                 })
                 
                 self.last_frame_time = current_time
