@@ -77,6 +77,7 @@ class OSCConfig:
     max_fps: float = 30.0  # Maximum OSC message rate (FPS)
     rate_limit_enabled: bool = True
     auto_connect: bool = False  # Auto-connect on application startup
+    connect_on_start: bool = False  # Connect on application startup
     # Field selection states
     send_center: bool = True
     send_position: bool = False
@@ -250,6 +251,7 @@ class SettingsManager:
                 max_fps=osc_data.get('max_fps', 30.0),
                 rate_limit_enabled=osc_data.get('rate_limit_enabled', True),
                 auto_connect=osc_data.get('auto_connect', False),
+                connect_on_start=osc_data.get('connect_on_start', False),
                 send_center=osc_data.get('send_center', True),
                 send_position=osc_data.get('send_position', False),
                 send_size=osc_data.get('send_size', False),

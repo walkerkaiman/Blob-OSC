@@ -669,9 +669,13 @@
                         <label for="normalize-coords">Normalize Coordinates</label>
                     </div>
 
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="connect-on-start" onchange="updateOSCConfig()">
+                        <label for="connect-on-start">Connect on Start</label>
+                    </div>
+
                     <div style="margin-top: 20px;">
                         <button class="btn btn-success" onclick="connectOSC()">Connect</button>
-                        <button class="btn btn-warning" onclick="testOSC()">Test</button>
                     </div>
                 </div>
 
@@ -874,6 +878,7 @@
                 document.getElementById('osc-ip').value = config.osc.ip || '127.0.0.1';
                 document.getElementById('osc-port').value = config.osc.port || 8000;
                 document.getElementById('normalize-coords').checked = config.osc.normalize_coords !== false;
+                document.getElementById('connect-on-start').checked = config.osc.connect_on_start || false;
                 document.getElementById('send-center').checked = config.osc.send_center !== false;
                 document.getElementById('send-position').checked = config.osc.send_position || false;
                 document.getElementById('send-size').checked = config.osc.send_size || false;
@@ -1118,29 +1123,13 @@
             }
         }
         
-        async function testOSC() {
-            try {
-                const response = await fetch('/api/osc/test', {
-                    method: 'POST'
-                });
-                
-                if (response.ok) {
-                    addConsoleMessage('Test message sent', 'success');
-                } else {
-                    addConsoleMessage('Failed to send test message', 'error');
-                }
-            } catch (error) {
-                console.error('Error testing OSC:', error);
-                addConsoleMessage('Failed to send test message', 'error');
-            }
-        }
-        
         function updateOSCConfig() {
             updateConfig('osc', {
                 ip: document.getElementById('osc-ip').value,
                 port: parseInt(document.getElementById('osc-port').value),
                 protocol: 'udp',
                 normalize_coords: document.getElementById('normalize-coords').checked,
+                connect_on_start: document.getElementById('connect-on-start').checked,
                 send_center: document.getElementById('send-center').checked,
                 send_position: document.getElementById('send-position').checked,
                 send_size: document.getElementById('send-size').checked,

@@ -564,6 +564,15 @@ class WebBlobApp:
             # Initialize simple OpenCV tracking
             self.logger.info("Using simple OpenCV tracking")
             
+            # Auto-connect OSC if enabled
+            if self.settings_manager.config.osc.connect_on_start:
+                try:
+                    osc_config = self.settings_manager.config.osc
+                    self.osc_client = OSCClient(osc_config.ip, osc_config.port, osc_config.protocol)
+                    self.logger.info(f"Auto-connected to OSC at {osc_config.ip}:{osc_config.port}")
+                except Exception as e:
+                    self.logger.error(f"Failed to auto-connect OSC: {e}")
+            
             # Start processing thread
             self.running = True
             self.processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
