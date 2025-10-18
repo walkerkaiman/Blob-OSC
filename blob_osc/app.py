@@ -57,6 +57,33 @@ def parse_arguments():
     )
     
     parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Run in web mode (Flask web interface) - for Raspberry Pi"
+    )
+    
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host for web mode (default: 0.0.0.0)"
+    )
+    
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Port for web mode (default: 5000)"
+    )
+    
+    parser.add_argument(
+        "--target-fps",
+        type=float,
+        default=5.0,
+        help="Target FPS for processing (default: 5.0 for Pi optimization)"
+    )
+    
+    parser.add_argument(
         "--camera-id",
         type=int,
         default=None,
@@ -93,7 +120,10 @@ def main():
     logger.info(f"Log level: {args.log_level}")
     
     try:
-        if args.headless:
+        if args.web:
+            logger.info("Running in web mode")
+            run_web(args)
+        elif args.headless:
             logger.info("Running in headless mode")
             # TODO: Implement headless mode for testing/automation
             run_headless(args)
@@ -281,6 +311,35 @@ def run_headless(args):
         camera_manager.close_camera()
         osc_client.close()
         logger.info("Headless mode finished")
+
+
+def run_web(args):
+    """Run the web application."""
+    from .web_app import create_app
+    
+    try:
+        # Create web application
+        app = create_app(args.config)
+        
+        # Set target FPS from command line
+        app.target_fps = args.target_fps
+        app.frame_interval = 1.0 / args.target_fps
+        
+        # Update performance config
+        app.settings_manager.update_performance_config(
+            target_fps=args.target_fps
+        )
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Web interface available at: http://{args.host}:{args.port}")
+        logger.info("Press Ctrl+C to stop the application")
+        
+        # Start web server
+        app.start(host=args.host, port=args.port, debug=False)
+        
+    except Exception as e:
+        logger.error(f"Web application error: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

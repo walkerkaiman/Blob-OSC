@@ -10,6 +10,13 @@ from typing import List, Optional, Tuple
 from queue import Queue, Empty
 import numpy as np
 
+# Raspberry Pi Camera Module support
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+except ImportError:
+    PICAMERA_AVAILABLE = False
+
 
 @dataclass
 class CameraInfo:
@@ -28,7 +35,9 @@ class CameraManager:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.cap: Optional[cv2.VideoCapture] = None
+        self.picam: Optional[Picamera2] = None  # Raspberry Pi Camera Module
         self.current_camera_id: Optional[int] = None
+        self.current_camera_type: str = "usb"  # "usb" or "picam"
         self.frame_queue: Queue = Queue(maxsize=2)
         self.capture_thread: Optional[threading.Thread] = None
         self.capture_running = False
@@ -39,6 +48,20 @@ class CameraManager:
     def list_cameras(self) -> List[CameraInfo]:
         """Enumerate available cameras with friendly names."""
         cameras = []
+        
+        # Check for Raspberry Pi Camera Module first (Linux only)
+        if platform.system() == "Linux" and PICAMERA_AVAILABLE:
+            try:
+                # Try to initialize Pi Camera to check if it's available
+                test_picam = Picamera2()
+                camera_info = test_picam.camera_properties
+                test_picam.close()
+                
+                # Add Pi Camera Module as camera 0
+                cameras.append(CameraInfo(0, "Raspberry Pi Camera Module", "picam"))
+                self.logger.info("Found Raspberry Pi Camera Module")
+            except Exception as e:
+                self.logger.debug(f"Pi Camera Module not available: {e}")
         
         # For Windows, try pygrabber first for accurate device names
         if platform.system() == "Windows":
@@ -288,11 +311,44 @@ class CameraManager:
     
     def open_camera(self, camera_id: int) -> bool:
         """Open a camera for capture."""
-        if self.cap is not None:
+        if self.cap is not None or self.picam is not None:
             self.close_camera()
         
         try:
-            # Try different backends for better compatibility
+            # Check if this is a Pi Camera Module
+            if (camera_id == 0 and platform.system() == "Linux" and PICAMERA_AVAILABLE and
+                len([c for c in self.list_cameras() if c.backend_id == "picam"]) > 0):
+                
+                try:
+                    self.picam = Picamera2()
+                    
+                    # Configure camera with reasonable defaults for blob detection
+                    camera_config = self.picam.create_video_configuration(
+                        main={"size": (1280, 720), "format": "RGB888"},
+                        buffer_count=2
+                    )
+                    self.picam.configure(camera_config)
+                    self.picam.start()
+                    
+                    # Test if we can read frames
+                    test_frame = self.picam.capture_array()
+                    if test_frame is not None and test_frame.size > 0:
+                        self.current_camera_id = camera_id
+                        self.current_camera_type = "picam"
+                        self.logger.info(f"Opened Raspberry Pi Camera Module")
+                        return True
+                    else:
+                        self.picam.close()
+                        self.picam = None
+                        
+                except Exception as e:
+                    self.logger.error(f"Failed to open Pi Camera Module: {e}")
+                    if self.picam:
+                        self.picam.close()
+                        self.picam = None
+                    return False
+            
+            # Try USB cameras with different backends
             backends = [cv2.CAP_DSHOW, cv2.CAP_V4L2, cv2.CAP_ANY]
             
             for backend in backends:
@@ -302,7 +358,8 @@ class CameraManager:
                     ret, frame = self.cap.read()
                     if ret and frame is not None:
                         self.current_camera_id = camera_id
-                        self.logger.info(f"Opened camera {camera_id} with backend {backend}")
+                        self.current_camera_type = "usb"
+                        self.logger.info(f"Opened USB camera {camera_id} with backend {backend}")
                         return True
                     else:
                         self.cap.release()
@@ -316,6 +373,9 @@ class CameraManager:
             if self.cap:
                 self.cap.release()
                 self.cap = None
+            if self.picam:
+                self.picam.close()
+                self.picam = None
             return False
     
     def close_camera(self) -> None:
@@ -324,24 +384,40 @@ class CameraManager:
         if self.cap:
             self.cap.release()
             self.cap = None
+        if self.picam:
+            self.picam.close()
+            self.picam = None
         self.current_camera_id = None
+        self.current_camera_type = "usb"
         self.logger.info("Camera closed")
     
     def set_resolution(self, width: int, height: int) -> bool:
         """Set camera resolution."""
-        if not self.cap or not self.cap.isOpened():
-            return False
-        
         try:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            
-            # Verify the resolution was set
-            actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            self.logger.info(f"Set resolution to {actual_width}x{actual_height} (requested: {width}x{height})")
-            return True
+            if self.current_camera_type == "picam" and self.picam:
+                # For Pi Camera Module, reconfigure the camera
+                camera_config = self.picam.create_video_configuration(
+                    main={"size": (width, height), "format": "RGB888"},
+                    buffer_count=2
+                )
+                self.picam.stop()
+                self.picam.configure(camera_config)
+                self.picam.start()
+                self.logger.info(f"Set Pi Camera resolution to {width}x{height}")
+                return True
+                
+            elif self.cap and self.cap.isOpened():
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                
+                # Verify the resolution was set
+                actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                self.logger.info(f"Set USB camera resolution to {actual_width}x{actual_height} (requested: {width}x{height})")
+                return True
+            else:
+                return False
             
         except Exception as e:
             self.logger.error(f"Failed to set resolution: {e}")
@@ -349,16 +425,28 @@ class CameraManager:
     
     def get_resolution(self) -> Tuple[int, int]:
         """Get current camera resolution."""
-        if not self.cap or not self.cap.isOpened():
+        try:
+            if self.current_camera_type == "picam" and self.picam:
+                # Get resolution from Pi Camera configuration
+                config = self.picam.camera_config
+                if 'main' in config and 'size' in config['main']:
+                    size = config['main']['size']
+                    return (size[0], size[1])
+                return (1280, 720)  # Default for Pi Camera
+                
+            elif self.cap and self.cap.isOpened():
+                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                return (width, height)
+            else:
+                return (0, 0)
+        except Exception as e:
+            self.logger.error(f"Failed to get resolution: {e}")
             return (0, 0)
-        
-        width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        return (width, height)
     
     def start_capture(self) -> bool:
         """Start continuous frame capture in a separate thread."""
-        if not self.cap or not self.cap.isOpened():
+        if not ((self.cap and self.cap.isOpened()) or (self.picam)):
             self.logger.error("Cannot start capture: no camera opened")
             return False
         
@@ -384,12 +472,32 @@ class CameraManager:
         last_fps_time = time.time()
         fps_frame_count = 0
         
-        while self.capture_running and self.cap and self.cap.isOpened():
+        while self.capture_running:
             try:
-                ret, frame = self.cap.read()
-                if not ret or frame is None:
-                    self.logger.warning("Failed to read frame from camera")
-                    time.sleep(0.01)  # Small delay to prevent busy waiting
+                frame = None
+                
+                if self.current_camera_type == "picam" and self.picam:
+                    # Capture from Pi Camera Module
+                    try:
+                        frame = self.picam.capture_array()
+                        if frame is not None:
+                            # Convert RGB to BGR for OpenCV compatibility
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to read frame from Pi Camera: {e}")
+                        time.sleep(0.01)
+                        continue
+                        
+                elif self.cap and self.cap.isOpened():
+                    # Capture from USB camera
+                    ret, frame = self.cap.read()
+                    if not ret or frame is None:
+                        self.logger.warning("Failed to read frame from USB camera")
+                        time.sleep(0.01)
+                        continue
+                
+                if frame is None:
+                    time.sleep(0.01)
                     continue
                 
                 # Try to put frame in queue (non-blocking)
@@ -460,7 +568,7 @@ class CameraManager:
     
     def is_opened(self) -> bool:
         """Check if a camera is currently opened."""
-        return self.cap is not None and self.cap.isOpened()
+        return (self.cap is not None and self.cap.isOpened()) or (self.picam is not None)
     
     def __del__(self):
         """Cleanup on destruction."""

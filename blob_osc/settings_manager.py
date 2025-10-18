@@ -103,6 +103,14 @@ class OSCConfig:
 
 
 @dataclass
+class PerformanceConfig:
+    target_fps: float = 5.0  # Target FPS for Raspberry Pi optimization
+    max_camera_fps: float = 30.0  # Maximum camera FPS
+    processing_enabled: bool = True
+    camera_module_enabled: bool = True  # Enable Pi Camera Module support
+
+
+@dataclass
 class AppConfig:
     camera: CameraConfig = None
     roi: ROIConfig = None
@@ -111,6 +119,7 @@ class AppConfig:
     blob: BlobConfig = None
     bytetrack: ByteTrackConfig = None
     osc: OSCConfig = None
+    performance: PerformanceConfig = None
     
     def __post_init__(self):
         if self.camera is None:
@@ -127,6 +136,8 @@ class AppConfig:
             self.bytetrack = ByteTrackConfig()
         if self.osc is None:
             self.osc = OSCConfig()
+        if self.performance is None:
+            self.performance = PerformanceConfig()
 
 
 class SettingsManager:
@@ -264,6 +275,16 @@ class SettingsManager:
                 send_area=osc_data.get('send_area', False),
                 send_polygon=osc_data.get('send_polygon', False)
             )
+        
+        # Performance config
+        if 'performance' in data:
+            perf_data = data['performance']
+            self.config.performance = PerformanceConfig(
+                target_fps=perf_data.get('target_fps', 5.0),
+                max_camera_fps=perf_data.get('max_camera_fps', 30.0),
+                processing_enabled=perf_data.get('processing_enabled', True),
+                camera_module_enabled=perf_data.get('camera_module_enabled', True)
+            )
     
     def _to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -274,7 +295,8 @@ class SettingsManager:
             'morph': asdict(self.config.morph),
             'blob': asdict(self.config.blob),
             'bytetrack': asdict(self.config.bytetrack),
-            'osc': asdict(self.config.osc)
+            'osc': asdict(self.config.osc),
+            'performance': asdict(self.config.performance)
         }
     
     def get_camera_config(self) -> CameraConfig:
@@ -304,6 +326,10 @@ class SettingsManager:
     def get_osc_config(self) -> OSCConfig:
         """Get OSC configuration."""
         return self.config.osc
+    
+    def get_performance_config(self) -> PerformanceConfig:
+        """Get performance configuration."""
+        return self.config.performance
     
     def update_camera_config(self, **kwargs) -> None:
         """Update camera configuration."""
@@ -352,6 +378,13 @@ class SettingsManager:
         for key, value in kwargs.items():
             if hasattr(self.config.osc, key):
                 setattr(self.config.osc, key, value)
+        self.save_config()
+    
+    def update_performance_config(self, **kwargs) -> None:
+        """Update performance configuration."""
+        for key, value in kwargs.items():
+            if hasattr(self.config.performance, key):
+                setattr(self.config.performance, key, value)
         self.save_config()
     
     def disable_auto_save(self) -> None:

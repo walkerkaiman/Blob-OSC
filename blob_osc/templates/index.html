@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blob OSC - Raspberry Pi Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #ffffff;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            background: #2a2a2a;
+            border-radius: 10px 10px 0 0;
+            overflow: hidden;
+            margin-bottom: 0;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            background: #2a2a2a;
+            color: #cccccc;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .tab.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab:hover {
+            background: #3a3a3a;
+        }
+
+        .tab.active:hover {
+            background: #5a6fd8;
+        }
+
+        .tab-content {
+            background: #2a2a2a;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+            min-height: 600px;
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        .section {
+            background: #333;
+            padding: 25px;
+            border-radius: 8px;
+            border: 1px solid #444;
+        }
+
+        .section h3 {
+            margin-bottom: 20px;
+            color: #667eea;
+            font-size: 1.3em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px;
+            background: #444;
+            border: 1px solid #555;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            background: #5a6fd8;
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .slider {
+            flex: 1;
+            height: 6px;
+            background: #444;
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #667eea;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #667eea;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+
+        .slider-value {
+            min-width: 80px;
+            text-align: center;
+            font-weight: 500;
+            color: #667eea;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+
+        .preview-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .preview-image {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .preview-placeholder {
+            width: 100%;
+            height: 300px;
+            background: #222;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 18px;
+        }
+
+        .status-bar {
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+
+        .status-indicator.connected {
+            background: #28a745;
+        }
+
+        .status-indicator.processing {
+            background: #ffc107;
+        }
+
+        .console {
+            background: #000;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 8px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            border: 1px solid #333;
+        }
+
+        .console-line {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .console-line.success {
+            color: #28a745;
+        }
+
+        .console-line.error {
+            color: #dc3545;
+        }
+
+        .console-line.warning {
+            color: #ffc107;
+        }
+
+        .console-line.info {
+            color: #17a2b8;
+        }
+
+        .fps-display {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .blob-info {
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .blob-item {
+            background: #444;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .grid-3 {
+                grid-template-columns: 1fr;
+            }
+            
+            .tabs {
+                flex-direction: column;
+            }
+            
+            .tab {
+                border-radius: 0;
+            }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 Blob OSC</h1>
+            <p>Raspberry Pi Edition - Real-time Blob Detection & OSC Streaming</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('capture')">1. Capture / ROI</button>
+            <button class="tab" onclick="switchTab('threshold')">2. Threshold & Blobs</button>
+            <button class="tab" onclick="switchTab('osc')">3. OSC Output</button>
+        </div>
+
+        <!-- Tab 1: Capture / ROI -->
+        <div id="capture" class="tab-content active">
+            <div class="grid">
+                <div class="section">
+                    <h3>📹 Camera Preview</h3>
+                    <div class="preview-container">
+                        <img id="roi-preview" class="preview-image" style="display: none;">
+                        <div id="roi-placeholder" class="preview-placeholder">
+                            No camera feed
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-top: 15px;">
+                        <button class="btn btn-warning" onclick="togglePause()">
+                            <span id="pause-text">Pause</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>⚙️ Camera Settings</h3>
+                    
+                    <div class="form-group">
+                        <label>Camera:</label>
+                        <select id="camera-select" class="form-control" onchange="selectCamera()">
+                            <option value="">Select camera...</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="refreshCameras()">Refresh</button>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Resolution:</label>
+                        <select id="resolution-select" class="form-control" onchange="setResolution()">
+                            <option value="640x480">640x480</option>
+                            <option value="1280x720" selected>1280x720</option>
+                            <option value="1920x1080">1920x1080</option>
+                        </select>
+                    </div>
+
+                    <h3 style="margin-top: 30px;">🎯 Region of Interest</h3>
+                    
+                    <div class="form-group">
+                        <label>Left Crop (px):</label>
+                        <div class="slider-container">
+                            <input type="range" id="left-slider" class="slider" min="0" max="1000" value="0" oninput="updateROI()">
+                            <span id="left-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Top Crop (px):</label>
+                        <div class="slider-container">
+                            <input type="range" id="top-slider" class="slider" min="0" max="1000" value="0" oninput="updateROI()">
+                            <span id="top-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Right Crop (px):</label>
+                        <div class="slider-container">
+                            <input type="range" id="right-slider" class="slider" min="0" max="1000" value="0" oninput="updateROI()">
+                            <span id="right-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Bottom Crop (px):</label>
+                        <div class="slider-container">
+                            <input type="range" id="bottom-slider" class="slider" min="0" max="1000" value="0" oninput="updateROI()">
+                            <span id="bottom-value" class="slider-value">0px</span>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px;">
+                        <button class="btn" onclick="useROI()">Use ROI</button>
+                        <button class="btn btn-secondary" onclick="resetROI()">Reset ROI</button>
+                        <div class="checkbox-group" style="margin-top: 15px;">
+                            <input type="checkbox" id="lock-roi" onchange="toggleROILock()">
+                            <label for="lock-roi">Lock ROI</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 2: Threshold & Blobs -->
+        <div id="threshold" class="tab-content">
+            <div class="grid">
+                <div class="section">
+                    <h3>🔧 Processing Controls</h3>
+                    
+                    <div class="form-group">
+                        <label>Channel:</label>
+                        <select id="channel-select" class="form-control" onchange="updateProcessing()">
+                            <option value="gray" selected>Gray</option>
+                            <option value="red">Red</option>
+                            <option value="green">Green</option>
+                            <option value="blue">Blue</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Blur:</label>
+                        <div class="slider-container">
+                            <input type="range" id="blur-slider" class="slider" min="0" max="15" value="3" oninput="updateBlur()">
+                            <span id="blur-value" class="slider-value">3</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Threshold Level:</label>
+                        <div class="slider-container">
+                            <input type="range" id="threshold-slider" class="slider" min="0" max="255" value="127" oninput="updateThreshold()">
+                            <span id="threshold-value" class="slider-value">127</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Noise Removal:</label>
+                        <div class="slider-container">
+                            <input type="range" id="morph-open-slider" class="slider" min="0" max="10" value="0" oninput="updateMorphOpen()">
+                            <span id="morph-open-value" class="slider-value">0</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Gap Filling:</label>
+                        <div class="slider-container">
+                            <input type="range" id="morph-close-slider" class="slider" min="0" max="10" value="0" oninput="updateMorphClose()">
+                            <span id="morph-close-value" class="slider-value">0</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Min Area:</label>
+                        <div class="slider-container">
+                            <input type="range" id="min-area-slider" class="slider" min="0" max="100000" value="2000" oninput="updateMinArea()">
+                            <span id="min-area-value" class="slider-value">0.02000</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Max Area:</label>
+                        <div class="slider-container">
+                            <input type="range" id="max-area-slider" class="slider" min="0" max="100000" value="100000" oninput="updateMaxArea()">
+                            <span id="max-area-value" class="slider-value">1.00000</span>
+                        </div>
+                    </div>
+
+                    <h3 style="margin-top: 30px;">🎯 Tracking</h3>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="track-ids" checked onchange="updateBlobConfig()">
+                        <label for="track-ids">Track IDs</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="use-bytetrack" checked onchange="updateBlobConfig()">
+                        <label for="use-bytetrack">Use ByteTrack</label>
+                    </div>
+
+                    <button class="btn btn-warning" onclick="clearIDs()">Clear IDs</button>
+                </div>
+
+                <div class="section">
+                    <h3>👁️ Preview</h3>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h4>Binary Image</h4>
+                        <div class="preview-container">
+                            <img id="binary-preview" class="preview-image" style="display: none;">
+                            <div id="binary-placeholder" class="preview-placeholder">
+                                No binary image
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4>Blob Detection</h4>
+                        <div class="preview-container">
+                            <img id="overlay-preview" class="preview-image" style="display: none;">
+                            <div id="overlay-placeholder" class="preview-placeholder">
+                                No overlay
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="blob-info">
+                <h3>📊 Detected Blobs</h3>
+                <div id="blob-list">
+                    <p style="color: #666; text-align: center;">No blobs detected</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 3: OSC Output -->
+        <div id="osc" class="tab-content">
+            <div class="grid">
+                <div class="section">
+                    <h3>🔌 OSC Settings</h3>
+                    
+                    <div class="form-group">
+                        <label>IP Address:</label>
+                        <input type="text" id="osc-ip" class="form-control" value="127.0.0.1" onchange="updateOSCConfig()">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Port:</label>
+                        <input type="number" id="osc-port" class="form-control" value="8000" onchange="updateOSCConfig()">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Protocol:</label>
+                        <select id="osc-protocol" class="form-control" onchange="updateOSCConfig()">
+                            <option value="udp" selected>UDP</option>
+                            <option value="tcp">TCP</option>
+                        </select>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="normalize-coords" checked onchange="updateOSCConfig()">
+                        <label for="normalize-coords">Normalize Coordinates</label>
+                    </div>
+
+                    <div style="margin-top: 20px;">
+                        <button class="btn btn-success" onclick="connectOSC()">Connect</button>
+                        <button class="btn btn-warning" onclick="testOSC()">Test</button>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h3>📤 Field Selection</h3>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-center" checked onchange="updateOSCConfig()">
+                        <label for="send-center">Center (cx, cy)</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-position" onchange="updateOSCConfig()">
+                        <label for="send-position">Position (x, y)</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-size" onchange="updateOSCConfig()">
+                        <label for="send-size">Size (w, h)</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-area" onchange="updateOSCConfig()">
+                        <label for="send-area">Area</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-polygon" onchange="updateOSCConfig()">
+                        <label for="send-polygon">Polygon</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="send-on-detect" checked onchange="updateOSCConfig()">
+                        <label for="send-on-detect">Send on Detection</label>
+                    </div>
+
+                    <button class="btn" onclick="manualSend()" style="margin-top: 20px;">Manual Send</button>
+                </div>
+
+                <div class="section">
+                    <h3>📋 Console</h3>
+                    <div id="console" class="console"></div>
+                    <button class="btn btn-secondary" onclick="clearConsole()" style="margin-top: 10px;">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <div id="connection-indicator" class="status-indicator"></div>
+                <span>OSC: <span id="osc-status">Disconnected</span></span>
+            </div>
+            <div class="status-item">
+                <div id="processing-indicator" class="status-indicator"></div>
+                <span>Processing: <span id="processing-status">Running</span></span>
+            </div>
+            <div class="status-item">
+                <span>FPS: <span id="fps-display">0</span></span>
+            </div>
+            <div class="status-item">
+                <span>Target FPS: <span id="target-fps">5</span></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Socket.IO connection
+        const socket = io();
+        
+        // Global state
+        let isConnected = false;
+        let isProcessing = true;
+        let currentConfig = {};
+        
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            refreshCameras();
+            setupSocketListeners();
+        });
+        
+        function setupSocketListeners() {
+            socket.on('connect', function() {
+                console.log('Connected to server');
+                addConsoleMessage('Connected to Blob OSC server', 'success');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+                addConsoleMessage('Disconnected from server', 'warning');
+            });
+            
+            socket.on('frames_update', function(data) {
+                updatePreviews(data);
+            });
+            
+            socket.on('status', function(data) {
+                console.log('Status:', data.message);
+            });
+        }
+        
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+        
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                currentConfig = config;
+                applyConfigToUI(config);
+                updateTargetFPS(config.performance?.target_fps || 5);
+            } catch (error) {
+                console.error('Error loading config:', error);
+                addConsoleMessage('Failed to load configuration', 'error');
+            }
+        }
+        
+        function applyConfigToUI(config) {
+            // Apply camera config
+            if (config.camera) {
+                document.getElementById('resolution-select').value = 
+                    `${config.camera.resolution[0]}x${config.camera.resolution[1]}`;
+            }
+            
+            // Apply ROI config
+            if (config.roi) {
+                document.getElementById('left-slider').value = config.roi.left_crop || 0;
+                document.getElementById('top-slider').value = config.roi.top_crop || 0;
+                document.getElementById('right-slider').value = config.roi.right_crop || 0;
+                document.getElementById('bottom-slider').value = config.roi.bottom_crop || 0;
+                document.getElementById('lock-roi').checked = config.roi.locked || false;
+                updateROIValues();
+            }
+            
+            // Apply threshold config
+            if (config.threshold) {
+                document.getElementById('channel-select').value = config.threshold.channel || 'gray';
+                document.getElementById('blur-slider').value = config.threshold.blur || 3;
+                document.getElementById('threshold-slider').value = config.threshold.value || 127;
+                document.getElementById('blur-value').textContent = config.threshold.blur || 3;
+                document.getElementById('threshold-value').textContent = config.threshold.value || 127;
+            }
+            
+            // Apply morph config
+            if (config.morph) {
+                document.getElementById('morph-open-slider').value = config.morph.open || 0;
+                document.getElementById('morph-close-slider').value = config.morph.close || 0;
+                document.getElementById('morph-open-value').textContent = config.morph.open || 0;
+                document.getElementById('morph-close-value').textContent = config.morph.close || 0;
+            }
+            
+            // Apply blob config
+            if (config.blob) {
+                document.getElementById('track-ids').checked = config.blob.track_ids !== false;
+                document.getElementById('use-bytetrack').checked = config.blob.use_bytetrack !== false;
+                
+                // Convert pixel areas to normalized values for sliders
+                const roi = config.roi || {};
+                const roiArea = (roi.w || 640) * (roi.h || 480);
+                if (roiArea > 0) {
+                    const minNormalized = Math.min(100000, Math.max(0, (config.blob.min_area || 200) / roiArea * 100000));
+                    const maxNormalized = Math.min(100000, Math.max(0, (config.blob.max_area || 20000) / roiArea * 100000));
+                    
+                    document.getElementById('min-area-slider').value = minNormalized;
+                    document.getElementById('max-area-slider').value = maxNormalized;
+                    document.getElementById('min-area-value').textContent = (minNormalized / 100000).toFixed(5);
+                    document.getElementById('max-area-value').textContent = (maxNormalized / 100000).toFixed(5);
+                }
+            }
+            
+            // Apply OSC config
+            if (config.osc) {
+                document.getElementById('osc-ip').value = config.osc.ip || '127.0.0.1';
+                document.getElementById('osc-port').value = config.osc.port || 8000;
+                document.getElementById('osc-protocol').value = config.osc.protocol || 'udp';
+                document.getElementById('normalize-coords').checked = config.osc.normalize_coords !== false;
+                document.getElementById('send-center').checked = config.osc.send_center !== false;
+                document.getElementById('send-position').checked = config.osc.send_position || false;
+                document.getElementById('send-size').checked = config.osc.send_size || false;
+                document.getElementById('send-area').checked = config.osc.send_area || false;
+                document.getElementById('send-polygon').checked = config.osc.send_polygon || false;
+                document.getElementById('send-on-detect').checked = config.osc.send_on_detect !== false;
+            }
+        }
+        
+        async function refreshCameras() {
+            try {
+                const response = await fetch('/api/cameras');
+                const cameras = await response.json();
+                
+                const select = document.getElementById('camera-select');
+                select.innerHTML = '<option value="">Select camera...</option>';
+                
+                cameras.forEach(camera => {
+                    const option = document.createElement('option');
+                    option.value = camera.id;
+                    option.textContent = camera.name;
+                    select.appendChild(option);
+                });
+                
+                addConsoleMessage(`Found ${cameras.length} cameras`, 'info');
+            } catch (error) {
+                console.error('Error refreshing cameras:', error);
+                addConsoleMessage('Failed to refresh cameras', 'error');
+            }
+        }
+        
+        async function selectCamera() {
+            const cameraId = document.getElementById('camera-select').value;
+            if (!cameraId) return;
+            
+            try {
+                const response = await fetch(`/api/camera/${cameraId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    addConsoleMessage(`Selected camera ${cameraId}`, 'success');
+                } else {
+                    addConsoleMessage('Failed to select camera', 'error');
+                }
+            } catch (error) {
+                console.error('Error selecting camera:', error);
+                addConsoleMessage('Failed to select camera', 'error');
+            }
+        }
+        
+        async function setResolution() {
+            const resolution = document.getElementById('resolution-select').value;
+            if (!resolution) return;
+            
+            const [width, height] = resolution.split('x').map(Number);
+            
+            try {
+                const response = await fetch('/api/camera/resolution', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ width, height })
+                });
+                
+                if (response.ok) {
+                    addConsoleMessage(`Set resolution to ${resolution}`, 'success');
+                } else {
+                    addConsoleMessage('Failed to set resolution', 'error');
+                }
+            } catch (error) {
+                console.error('Error setting resolution:', error);
+                addConsoleMessage('Failed to set resolution', 'error');
+            }
+        }
+        
+        function updateROI() {
+            updateROIValues();
+            updateConfig('roi', {
+                left_crop: parseInt(document.getElementById('left-slider').value),
+                top_crop: parseInt(document.getElementById('top-slider').value),
+                right_crop: parseInt(document.getElementById('right-slider').value),
+                bottom_crop: parseInt(document.getElementById('bottom-slider').value)
+            });
+        }
+        
+        function updateROIValues() {
+            document.getElementById('left-value').textContent = document.getElementById('left-slider').value + 'px';
+            document.getElementById('top-value').textContent = document.getElementById('top-slider').value + 'px';
+            document.getElementById('right-value').textContent = document.getElementById('right-slider').value + 'px';
+            document.getElementById('bottom-value').textContent = document.getElementById('bottom-slider').value + 'px';
+        }
+        
+        function useROI() {
+            addConsoleMessage('ROI settings applied', 'success');
+        }
+        
+        function resetROI() {
+            document.getElementById('left-slider').value = 0;
+            document.getElementById('top-slider').value = 0;
+            document.getElementById('right-slider').value = 0;
+            document.getElementById('bottom-slider').value = 0;
+            updateROI();
+            addConsoleMessage('ROI reset', 'info');
+        }
+        
+        function toggleROILock() {
+            const locked = document.getElementById('lock-roi').checked;
+            updateConfig('roi', { locked });
+            
+            // Disable/enable sliders
+            const sliders = ['left-slider', 'top-slider', 'right-slider', 'bottom-slider'];
+            sliders.forEach(id => {
+                document.getElementById(id).disabled = locked;
+            });
+        }
+        
+        function updateBlur() {
+            const value = document.getElementById('blur-slider').value;
+            document.getElementById('blur-value').textContent = value;
+            updateConfig('threshold', { blur: parseInt(value) });
+        }
+        
+        function updateThreshold() {
+            const value = document.getElementById('threshold-slider').value;
+            document.getElementById('threshold-value').textContent = value;
+            updateConfig('threshold', { value: parseInt(value) });
+        }
+        
+        function updateMorphOpen() {
+            const value = document.getElementById('morph-open-slider').value;
+            document.getElementById('morph-open-value').textContent = value;
+            updateConfig('morph', { open: parseInt(value) });
+        }
+        
+        function updateMorphClose() {
+            const value = document.getElementById('morph-close-slider').value;
+            document.getElementById('morph-close-value').textContent = value;
+            updateConfig('morph', { close: parseInt(value) });
+        }
+        
+        function updateMinArea() {
+            const value = parseInt(document.getElementById('min-area-slider').value);
+            const normalized = (value / 100000).toFixed(5);
+            document.getElementById('min-area-value').textContent = normalized;
+            
+            // Convert back to pixel area for config
+            const roi = currentConfig.roi || {};
+            const roiArea = (roi.w || 640) * (roi.h || 480);
+            const pixelArea = Math.round(normalized * roiArea);
+            updateConfig('blob', { min_area: pixelArea });
+        }
+        
+        function updateMaxArea() {
+            const value = parseInt(document.getElementById('max-area-slider').value);
+            const normalized = (value / 100000).toFixed(5);
+            document.getElementById('max-area-value').textContent = normalized;
+            
+            // Convert back to pixel area for config
+            const roi = currentConfig.roi || {};
+            const roiArea = (roi.w || 640) * (roi.h || 480);
+            const pixelArea = Math.round(normalized * roiArea);
+            updateConfig('blob', { max_area: pixelArea });
+        }
+        
+        function updateProcessing() {
+            updateConfig('threshold', { 
+                channel: document.getElementById('channel-select').value 
+            });
+        }
+        
+        function updateBlobConfig() {
+            updateConfig('blob', {
+                track_ids: document.getElementById('track-ids').checked,
+                use_bytetrack: document.getElementById('use-bytetrack').checked
+            });
+        }
+        
+        function clearIDs() {
+            addConsoleMessage('Blob tracking IDs cleared', 'info');
+        }
+        
+        async function connectOSC() {
+            const ip = document.getElementById('osc-ip').value;
+            const port = parseInt(document.getElementById('osc-port').value);
+            const protocol = document.getElementById('osc-protocol').value;
+            
+            try {
+                const response = await fetch('/api/osc/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ ip, port, protocol })
+                });
+                
+                if (response.ok) {
+                    isConnected = true;
+                    updateOSCStatus('Connected');
+                    addConsoleMessage(`Connected to OSC ${protocol.toUpperCase()} ${ip}:${port}`, 'success');
+                } else {
+                    addConsoleMessage('Failed to connect to OSC', 'error');
+                }
+            } catch (error) {
+                console.error('Error connecting OSC:', error);
+                addConsoleMessage('Failed to connect to OSC', 'error');
+            }
+        }
+        
+        async function testOSC() {
+            try {
+                const response = await fetch('/api/osc/test', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    addConsoleMessage('Test message sent', 'success');
+                } else {
+                    addConsoleMessage('Failed to send test message', 'error');
+                }
+            } catch (error) {
+                console.error('Error testing OSC:', error);
+                addConsoleMessage('Failed to send test message', 'error');
+            }
+        }
+        
+        function updateOSCConfig() {
+            updateConfig('osc', {
+                ip: document.getElementById('osc-ip').value,
+                port: parseInt(document.getElementById('osc-port').value),
+                protocol: document.getElementById('osc-protocol').value,
+                normalize_coords: document.getElementById('normalize-coords').checked,
+                send_center: document.getElementById('send-center').checked,
+                send_position: document.getElementById('send-position').checked,
+                send_size: document.getElementById('send-size').checked,
+                send_area: document.getElementById('send-area').checked,
+                send_polygon: document.getElementById('send-polygon').checked,
+                send_on_detect: document.getElementById('send-on-detect').checked
+            });
+        }
+        
+        function manualSend() {
+            addConsoleMessage('Manual send triggered', 'info');
+        }
+        
+        function togglePause() {
+            isProcessing = !isProcessing;
+            document.getElementById('pause-text').textContent = isProcessing ? 'Pause' : 'Resume';
+            updateProcessingStatus(isProcessing ? 'Running' : 'Paused');
+            
+            fetch('/api/processing/pause', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ paused: !isProcessing })
+            });
+        }
+        
+        function updatePreviews(data) {
+            // Update ROI preview
+            if (data.frame) {
+                const roiImg = document.getElementById('roi-preview');
+                const roiPlaceholder = document.getElementById('roi-placeholder');
+                roiImg.src = data.frame;
+                roiImg.style.display = 'block';
+                roiPlaceholder.style.display = 'none';
+            }
+            
+            // Update binary preview
+            if (data.binary) {
+                const binaryImg = document.getElementById('binary-preview');
+                const binaryPlaceholder = document.getElementById('binary-placeholder');
+                binaryImg.src = data.binary;
+                binaryImg.style.display = 'block';
+                binaryPlaceholder.style.display = 'none';
+            }
+            
+            // Update overlay preview
+            if (data.overlay) {
+                const overlayImg = document.getElementById('overlay-preview');
+                const overlayPlaceholder = document.getElementById('overlay-placeholder');
+                overlayImg.src = data.overlay;
+                overlayImg.style.display = 'block';
+                overlayPlaceholder.style.display = 'none';
+            }
+            
+            // Update blob list
+            updateBlobList(data.blobs || []);
+        }
+        
+        function updateBlobList(blobs) {
+            const blobList = document.getElementById('blob-list');
+            
+            if (blobs.length === 0) {
+                blobList.innerHTML = '<p style="color: #666; text-align: center;">No blobs detected</p>';
+                return;
+            }
+            
+            blobList.innerHTML = '';
+            blobs.forEach(blob => {
+                const blobItem = document.createElement('div');
+                blobItem.className = 'blob-item';
+                blobItem.innerHTML = `
+                    <span>Blob ID: ${blob.id}</span>
+                    <span>Center: (${blob.center[0].toFixed(1)}, ${blob.center[1].toFixed(1)})</span>
+                    <span>Area: ${blob.area.toFixed(0)}</span>
+                `;
+                blobList.appendChild(blobItem);
+            });
+        }
+        
+        function updateOSCStatus(status) {
+            document.getElementById('osc-status').textContent = status;
+            const indicator = document.getElementById('connection-indicator');
+            indicator.classList.toggle('connected', status === 'Connected');
+        }
+        
+        function updateProcessingStatus(status) {
+            document.getElementById('processing-status').textContent = status;
+            const indicator = document.getElementById('processing-indicator');
+            indicator.classList.toggle('processing', status === 'Running');
+        }
+        
+        function updateTargetFPS(fps) {
+            document.getElementById('target-fps').textContent = fps;
+        }
+        
+        function addConsoleMessage(message, type = 'info') {
+            const console = document.getElementById('console');
+            const line = document.createElement('div');
+            line.className = `console-line ${type}`;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            console.appendChild(line);
+            console.scrollTop = console.scrollHeight;
+        }
+        
+        function clearConsole() {
+            document.getElementById('console').innerHTML = '';
+        }
+        
+        async function updateConfig(section, data) {
+            try {
+                const updateData = {};
+                updateData[section] = data;
+                
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(updateData)
+                });
+                
+                if (response.ok) {
+                    // Update local config
+                    if (!currentConfig[section]) {
+                        currentConfig[section] = {};
+                    }
+                    Object.assign(currentConfig[section], data);
+                }
+            } catch (error) {
+                console.error('Error updating config:', error);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,6 +1,15 @@
 opencv-python>=4.8.0
-PyQt6>=6.5.0
+# Web framework dependencies
+flask>=2.3.0
+flask-socketio>=5.3.0
+eventlet>=0.33.0
+# Image processing and streaming
+pillow>=9.5.0
+# Camera module support for Raspberry Pi
+picamera2>=0.3.0; sys_platform == "linux"
+# OSC communication
 python-osc>=1.8.0
+# Core dependencies
 numpy>=1.24.0
 tqdm>=4.65.0
 pytest>=7.4.0
