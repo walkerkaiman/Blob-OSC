@@ -912,11 +912,23 @@
         
         function updateROI() {
             updateROIValues();
-            updateConfig('roi', {
+            
+            // Send ROI update to server for immediate overlay update
+            const roiData = {
                 left_crop: parseInt(document.getElementById('left-slider').value),
                 top_crop: parseInt(document.getElementById('top-slider').value),
                 right_crop: parseInt(document.getElementById('right-slider').value),
                 bottom_crop: parseInt(document.getElementById('bottom-slider').value)
+            };
+            
+            fetch('/api/roi/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(roiData)
+            }).catch(error => {
+                console.error('Error updating ROI:', error);
             });
         }
         

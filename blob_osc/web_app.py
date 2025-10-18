@@ -149,6 +149,14 @@ class WebBlobApp:
                 if 'roi' in data:
                     roi_data = data['roi']
                     self.settings_manager.update_roi_config(**roi_data)
+                    
+                    # Update ROI manager with new crop values
+                    if 'left_crop' in roi_data or 'top_crop' in roi_data or 'right_crop' in roi_data or 'bottom_crop' in roi_data:
+                        left = roi_data.get('left_crop', self.roi_manager.left_crop)
+                        top = roi_data.get('top_crop', self.roi_manager.top_crop)
+                        right = roi_data.get('right_crop', self.roi_manager.right_crop)
+                        bottom = roi_data.get('bottom_crop', self.roi_manager.bottom_crop)
+                        self.roi_manager.set_crop_values(left, top, right, bottom)
                 
                 # Update threshold config
                 if 'threshold' in data:
@@ -305,6 +313,32 @@ class WebBlobApp:
             except Exception as e:
                 self.logger.error(f"Error pausing processing: {e}")
                 return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/roi/update', methods=['POST'])
+        def update_roi():
+            """Update ROI crop values."""
+            try:
+                data = request.json
+                left = data.get('left_crop', 0)
+                top = data.get('top_crop', 0)
+                right = data.get('right_crop', 0)
+                bottom = data.get('bottom_crop', 0)
+                
+                # Update ROI manager immediately
+                self.roi_manager.set_crop_values(left, top, right, bottom)
+                
+                # Save to config
+                self.settings_manager.update_roi_config(
+                    left_crop=left,
+                    top_crop=top,
+                    right_crop=right,
+                    bottom_crop=bottom
+                )
+                
+                return jsonify({'status': 'success'})
+            except Exception as e:
+                self.logger.error(f"Error updating ROI: {e}")
+                return jsonify({'error': str(e)}), 500
     
     def _setup_socket_handlers(self):
         """Setup SocketIO event handlers."""
@@ -386,6 +420,11 @@ class WebBlobApp:
                 continue
             
             try:
+                # Set image size for ROI manager if not set
+                h, w = frame.shape[:2]
+                if (self.roi_manager.image_width != w or self.roi_manager.image_height != h):
+                    self.roi_manager.set_image_size(w, h)
+                
                 # Apply ROI
                 roi_frame = self.roi_manager.apply_crop(frame) if self.roi_manager else frame
                 if roi_frame is None:
@@ -415,7 +454,9 @@ class WebBlobApp:
                     self._send_blob_data_rate_limited()
                 
                 # Emit frame data to connected clients
-                frame_data = self._frame_to_base64(frame)
+                # Apply ROI overlay to the main frame for preview
+                frame_with_roi = self.roi_manager.draw_crop_overlay(frame)
+                frame_data = self._frame_to_base64(frame_with_roi)
                 binary_data = self._frame_to_base64(binary_frame)
                 
                 if blobs:
