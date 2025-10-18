@@ -78,7 +78,9 @@ class WebBlobApp:
                 config_dict = {
                     'camera': {
                         'friendly_name': self.settings_manager.config.camera.friendly_name,
-                        'resolution': self.settings_manager.config.camera.resolution
+                        'resolution': self.settings_manager.config.camera.resolution,
+                        'flip_x': self.settings_manager.config.camera.flip_x,
+                        'flip_y': self.settings_manager.config.camera.flip_y
                     },
                     'roi': {
                         'x': self.settings_manager.config.roi.x,
@@ -105,17 +107,12 @@ class WebBlobApp:
                     'blob': {
                         'min_area': self.settings_manager.config.blob.min_area,
                         'max_area': self.settings_manager.config.blob.max_area,
-                        'track_ids': self.settings_manager.config.blob.track_ids,
-                        'use_bytetrack': self.settings_manager.config.blob.use_bytetrack
-                    },
-                    'bytetrack': {
-                        'track_thresh': self.settings_manager.config.bytetrack.track_thresh,
-                        'track_buffer': self.settings_manager.config.bytetrack.track_buffer
+                        'track_ids': self.settings_manager.config.blob.track_ids
                     },
                     'osc': {
                         'ip': self.settings_manager.config.osc.ip,
                         'port': self.settings_manager.config.osc.port,
-                        'protocol': self.settings_manager.config.osc.protocol,
+                        'protocol': 'udp',
                         'normalize_coords': self.settings_manager.config.osc.normalize_coords,
                         'send_on_detect': self.settings_manager.config.osc.send_on_detect,
                         'send_center': self.settings_manager.config.osc.send_center,
@@ -173,10 +170,6 @@ class WebBlobApp:
                     blob_data = data['blob']
                     self.settings_manager.update_blob_config(**blob_data)
                 
-                # Update ByteTrack config
-                if 'bytetrack' in data:
-                    bytetrack_data = data['bytetrack']
-                    self.settings_manager.update_bytetrack_config(**bytetrack_data)
                 
                 # Update OSC config
                 if 'osc' in data:
@@ -420,6 +413,17 @@ class WebBlobApp:
                 continue
             
             try:
+                # Apply camera flip transformations if enabled
+                camera_config = self.settings_manager.get_camera_config()
+                if camera_config.flip_x or camera_config.flip_y:
+                    flip_code = -1  # Both X and Y
+                    if camera_config.flip_x and not camera_config.flip_y:
+                        flip_code = 1  # Only X (horizontal)
+                    elif camera_config.flip_y and not camera_config.flip_x:
+                        flip_code = 0  # Only Y (vertical)
+                    
+                    frame = cv2.flip(frame, flip_code)
+                
                 # Set image size for ROI manager if not set
                 h, w = frame.shape[:2]
                 if (self.roi_manager.image_width != w or self.roi_manager.image_height != h):
@@ -526,22 +530,8 @@ class WebBlobApp:
                     self.target_fps = perf_config.target_fps
                     self.frame_interval = 1.0 / self.target_fps
             
-            # Initialize ByteTrack if available
-            bytetrack_config = self.settings_manager.get_bytetrack_config()
-            blob_config = self.settings_manager.get_blob_config()
-            
-            if blob_config.use_bytetrack:
-                success = self.processor.initialize_bytetrack(
-                    track_thresh=bytetrack_config.track_thresh,
-                    track_buffer=bytetrack_config.track_buffer,
-                    match_thresh=bytetrack_config.match_thresh,
-                    min_box_area=bytetrack_config.min_box_area
-                )
-                if success:
-                    self.processor.set_tracking_mode(True)
-                    self.logger.info("ByteTrack initialized")
-                else:
-                    self.logger.warning("ByteTrack failed to initialize, using simple tracking")
+            # Initialize simple OpenCV tracking
+            self.logger.info("Using simple OpenCV tracking")
             
             # Start processing thread
             self.running = True

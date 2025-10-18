@@ -8,15 +8,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 import time
 
-try:
-    from .bytetrack import BYTETracker, Detection as ByteTrackDetection, Track as ByteTrackTrack, create_bytetrack_tracker
-    BYTETRACK_AVAILABLE = True
-except ImportError as e:
-    BYTETRACK_AVAILABLE = False
-    logging.warning(f"ByteTrack not available: {e}")
-    BYTETracker = None
-    ByteTrackDetection = None
-    ByteTrackTrack = None
+# Using simple OpenCV tracking instead of ByteTrack for better Pi compatibility
 
 
 @dataclass
