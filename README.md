@@ -394,15 +394,3 @@ Blob-OSC/
 ├── run_web.py        # Web application launcher
 └── README.md         # This documentation
 ```
-
-## License
-
-This project is open source and available under the MIT License.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-## Support
-
-For support, please open an issue on the GitHub repository or check the troubleshooting section above.

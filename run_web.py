@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web-based run script for the Blob OSC application on Raspberry Pi."""
+"""Web-based run script for the Blob OSC application."""
 
 import sys
 import logging
@@ -13,7 +13,7 @@ from blob_osc.web_app import create_app
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Blob OSC Web: Real-time blob detection and OSC streaming (Raspberry Pi Edition)"
+        description="Blob OSC Web: Real-time blob detection and OSC streaming"
     )
     
     parser.add_argument(
@@ -68,7 +68,7 @@ def main():
     logger = setup_logging()
     logger.setLevel(getattr(logging, args.log_level))
     
-    logger.info("Starting Blob OSC Web application (Raspberry Pi Edition)")
+    logger.info("Starting Blob OSC Web application")
     logger.info(f"Configuration file: {args.config}")
     logger.info(f"Log level: {args.log_level}")
     logger.info(f"Host: {args.host}, Port: {args.port}")
