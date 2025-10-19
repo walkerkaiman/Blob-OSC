@@ -4,10 +4,65 @@
 import sys
 import logging
 import argparse
+import os
+import tempfile
+import atexit
 from pathlib import Path
 
 from blob_osc.utils import setup_logging
 from blob_osc.web_app import create_app
+
+
+def check_singleton():
+    """Check if another instance is already running using lock file."""
+    lock_path = Path(tempfile.gettempdir()) / "blob_osc.lock"
+    
+    try:
+        if lock_path.exists():
+            # Read the PID from the lock file
+            with open(lock_path, 'r') as f:
+                pid = int(f.read().strip())
+            
+            # Check if the process is still running
+            try:
+                os.kill(pid, 0)  # This will raise an exception if process doesn't exist
+                print("ERROR: Another instance of Blob OSC is already running!")
+                print(f"Please close the existing instance (PID: {pid}) before starting a new one.")
+                print("To force close, you can:")
+                print(f"  - Kill the process: taskkill /PID {pid} /F (Windows) or kill {pid} (Linux/Mac)")
+                print(f"  - Or delete the lock file: {lock_path}")
+                return False
+            except OSError:
+                # Process doesn't exist, remove stale lock file
+                lock_path.unlink()
+                print(f"Removed stale lock file from previous session (PID: {pid})")
+        
+        # Create lock file with current PID
+        with open(lock_path, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        print(f"Blob OSC instance started (PID: {os.getpid()})")
+        return True
+        
+    except Exception as e:
+        print(f"Error checking for existing instances: {e}")
+        return True  # Continue anyway to avoid blocking the user
+
+
+def cleanup_lock():
+    """Clean up lock file on exit."""
+    try:
+        lock_path = Path(tempfile.gettempdir()) / "blob_osc.lock"
+        if lock_path.exists():
+            # Verify this is our lock file by checking PID
+            with open(lock_path, 'r') as f:
+                stored_pid = int(f.read().strip())
+            
+            if stored_pid == os.getpid():
+                lock_path.unlink()
+                print(f"Cleaned up lock file (PID: {os.getpid()})")
+    except Exception as e:
+        print(f"Error cleaning up lock file: {e}")
 
 
 def parse_arguments():
@@ -62,6 +117,13 @@ def parse_arguments():
 
 def main():
     """Main application entry point."""
+    # Check for existing instance first
+    if not check_singleton():
+        sys.exit(1)
+    
+    # Register cleanup function
+    atexit.register(cleanup_lock)
+    
     args = parse_arguments()
     
     # Setup logging

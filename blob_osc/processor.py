@@ -8,9 +8,6 @@ from dataclasses import dataclass
 from collections import defaultdict
 import time
 
-# Using simple OpenCV tracking instead of ByteTrack for better Pi compatibility
-
-
 @dataclass
 class BlobInfo:
     """Information about a detected blob."""
