@@ -1,4 +1,4 @@
-# Blob OSC - Web Edition
+# Blob OSC
 
 A professional real-time computer vision application that detects and tracks objects (blobs) from camera feeds and streams their data via OSC (Open Sound Control) messages. Features a modern web-based interface optimized for Raspberry Pi and cross-platform deployment. Perfect for interactive installations, live performances, motion tracking, and creative coding projects.
 
