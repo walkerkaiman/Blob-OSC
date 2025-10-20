@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Web-based run script for the Blob OSC application."""
-
 import sys
 import logging
 import argparse

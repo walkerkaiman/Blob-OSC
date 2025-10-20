@@ -4,18 +4,16 @@ A professional real-time computer vision application that detects and tracks obj
 
 ## Features
 
-- **🌐 Modern Web Interface** - Accessible from any device on your network
-- **🎯 Real-time blob detection** with advanced OpenCV processing
-- **📱 Mobile-friendly** responsive design for remote control
-- **🔧 Simple OpenCV tracking** optimized for Raspberry Pi performance
-- **📷 Intelligent camera detection** with support for Pi Camera Module and USB cameras
-- **⚙️ Configurable Region of Interest (ROI)** with visual cropping and lock features
-- **🎨 Advanced image processing** with channel selection, threshold modes, and morphological operations
-- **📡 Flexible OSC streaming** via UDP with customizable message formats
-- **💾 Comprehensive settings persistence** - all configurations saved to JSON
-- **🚀 Optimized for Raspberry Pi** with configurable FPS and performance settings
-- **🔄 X/Y axis flipping** for camera orientation adjustment
-- **📊 Real-time blob data display** with normalized coordinates (0-1 range)
+- **Web Interface** - Accessible from any device on your network
+- **Real-time blob detection** with advanced OpenCV processing
+- **Mobile-friendly** responsive design for remote control
+- **Simple OpenCV tracking** optimized for Raspberry Pi performance
+- **Intelligent camera detection** with support for Pi Camera Module and USB cameras
+- **Configurable Region of Interest (ROI)** with visual cropping and lock features
+- **Advanced image processing** with channel selection, threshold modes, and morphological operations
+- **Flexible OSC streaming** via UDP with customizable message formats
+- **Settings persistence** - all configurations saved to JSON
+- **Real-time blob data display** with normalized coordinates (0-1 range)
 
 ## Installation
 
