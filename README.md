@@ -28,15 +28,11 @@ A professional real-time computer vision application that detects and tracks obj
 ### Setup
 
 1. **Clone or download** this repository
-2. **Install dependencies**:
+2. **Start the app** (auto-creates `.venv` and installs dependencies):
    ```bash
-   pip install -r requirements.txt
+   python start.py
    ```
-3. **Run the web application**:
-   ```bash
-   python run_web.py
-   ```
-4. **Open your browser** and navigate to `http://localhost:5000` (or your device's IP address)
+3. **Open your browser** and navigate to `http://localhost:5000` (or your device's IP address)
 
 ### Dependencies
 
@@ -49,7 +45,7 @@ A professional real-time computer vision application that detects and tracks obj
 
 ## Quick Start Guide
 
-1. **Launch the application** with `python run_web.py`
+1. **Launch the application** with `python start.py`
 2. **Open your browser** to `http://localhost:5000`
 3. **Select a camera** in the "Capture / ROI" tab
 4. **Set up your region of interest** using the crop sliders
@@ -391,6 +387,7 @@ Blob-OSC/
 │       └── index.html # Main web interface
 ├── config.json        # Settings file (auto-generated)
 ├── requirements.txt   # Python dependencies
+├── start.py           # Convenience launcher (creates venv, installs deps, runs app)
 ├── run_web.py        # Web application launcher
 └── README.md         # This documentation
 ```
